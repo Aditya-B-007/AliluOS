@@ -59,6 +59,27 @@ The project intentionally starts small and grows incrementally, implementing eac
 
 # Building
 
+## Folder structure
+```
+rust-cli-os/
+│
+├── .cargo/
+│   └── config.toml               # Configures the build target and compiler flags
+│
+├── src/                          # The Kernel Source Code
+│   ├── main.rs                   # Kernel entry point, panic handler, and main shell loop
+│   ├── vga.rs                    # Text-mode video driver (handles printing and println!)
+│   ├── keyboard.rs               # Keyboard interrupt handling and key translation
+│   ├── interrupts.rs             # IDT, GDT, and Hardware Interrupt configurations
+│   ├── allocator.rs              # Heap allocation initialization (for dynamic strings/vecs)
+│   ├── fs.rs                     # The in-memory or basic file system (create, delete, edit)
+│   └── game.rs                   # The single built-in text game logic
+│
+├── x86_64-bare_metal.json        # Custom JSON target specification file for bare-metal x86_64
+├── Cargo.toml                    # Project dependencies (x86_64, bootloader, pc-keyboard, etc.)
+└── build.rs                      # Optional build script to link files or automate image creation
+
+```
 ## Requirements
 
 - Rust Nightly
