@@ -2,6 +2,7 @@
 
 # 🐿️ AliluOS
 ## ಅಳಿಲು Operating System
+<img width="3000" height="2000" alt="image" src="https://github.com/user-attachments/assets/71a679d6-0ad7-478e-9ee6-825ac2408826" />
 
 *A lightweight, command-line operating system written in Rust.*
 
