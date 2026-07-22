@@ -133,6 +133,49 @@ Features will be added gradually as each subsystem is implemented and tested.
 
 ---
 
+# Packaging a Bootable Image (.bin / .iso)
+
+This section describes how to compile the AliluOS kernel, bundle it with the bootloader, and package it into a virtual-machine-compatible `.bin` or `.iso` file.
+
+## 1. Prerequisites
+You must have the Rust nightly toolchain and llvm tools installed:
+```bash
+rustup default nightly
+rustup component add rust-src
+rustup component add llvm-tools-preview
+```
+
+Additionally, you need the `bootimage` cargo extension to automate bootloader injection and disk mapping:
+```bash
+cargo install bootimage
+```
+
+## 2. Generating a Bootable Raw Disk Image (.bin)
+To bundle the kernel ELF binary and compile the bootloader into a unified sector-mapped raw disk image, run:
+```bash
+cargo bootimage
+```
+* **Output Location**: `target/x86_64-bare_metal/debug/bootimage-alilu_os.bin`
+* **VM Loading**: This `.bin` file is a hybrid BIOS bootable image. You can load this file directly in **QEMU** or mount it as a **Virtual Hard Disk (IDE/SATA controller)** inside **VirtualBox** or **VMware**.
+
+## 3. Converting to an ISO File (.iso)
+If your virtual machine manager requires an ISO format (like mounting a CD-ROM drive), you can package the bootable raw binary inside a standard ISO layout:
+
+### On macOS / Linux
+Install `xorriso` (e.g., `brew install xorriso` or `sudo apt install xorriso`) and run:
+```bash
+# Create directory structure
+mkdir -p target/iso/boot/grub
+# Copy bootable bin
+cp target/x86_64-bare_metal/debug/bootimage-alilu_os.bin target/iso/boot/kernel.bin
+# Generate the ISO image
+xorriso -as mkisofs -R -b boot/kernel.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o target/alilu_os.iso target/iso
+```
+* **Output Location**: `target/alilu_os.iso`
+* **VM Loading**: Mount this `.iso` file directly into your virtual machine's virtual optical (CD/DVD) drive.
+
+---
+
 # Contributing
 
 Contributions, suggestions, and discussions are welcome.

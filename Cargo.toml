@@ -1,0 +1,24 @@
+[package]
+name = "alilu_os"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Standard x86_64 bootloader crate that builds a bootable image from the kernel
+bootloader = "0.9.23"
+
+# Unstable features setup to support bare metal compiler tasks
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+
+# Metadata describing parameters used by the cargo bootimage compiler tool
+[package.metadata.bootimage]
+test-args = [
+    "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+    "-serial", "stdio"
+]
