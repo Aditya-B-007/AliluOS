@@ -158,11 +158,23 @@ cargo bootimage
 * **Output Location**: `target/x86_64-bare_metal/debug/bootimage-alilu_os.bin`
 * **VM Loading**: This `.bin` file is a hybrid BIOS bootable image. You can load this file directly in **QEMU** or mount it as a **Virtual Hard Disk (IDE/SATA controller)** inside **VirtualBox** or **VMware**.
 
-## 3. Converting to an ISO File (.iso)
-If your virtual machine manager requires an ISO format (like mounting a CD-ROM drive), you can package the bootable raw binary inside a standard ISO layout:
+## 3. Converting to a VirtualBox VDI Hard Disk (.vdi)
+To run the OS inside Oracle VM VirtualBox, it is recommended to convert the raw `.bin` image into a Virtual Disk Image (`.vdi`):
+
+```bash
+VBoxManage convertfromraw target/x86_64-bare_metal/debug/bootimage-alilu_os.bin target/alilu_os.vdi --format VDI
+```
+* **Output Location**: `target/alilu_os.vdi`
+* **VirtualBox Setup**: 
+  1. Create a new virtual machine of type **Other** -> **Other/Unknown (64-bit)**.
+  2. Select **"Use an existing virtual hard disk file"** in the storage/hard disk wizard and browse to choose `alilu_os.vdi`.
+  3. Start the virtual machine.
+
+## 4. Converting to an ISO File (.iso)
+If your virtual machine manager requires a standard ISO format (optical CD-ROM mount), package the bootable raw binary:
 
 ### On macOS / Linux
-Install `xorriso` (e.g., `brew install xorriso` or `sudo apt install xorriso`) and run:
+Install `xorriso` (e.g. `brew install xorriso` or `sudo apt install xorriso`) and run:
 ```bash
 # Create directory structure
 mkdir -p target/iso/boot/grub
