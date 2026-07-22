@@ -1,12 +1,15 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod kernel;
 mod vga;
 mod keyboard;
 mod interrupts;
 mod allocator;
 mod fs;
+mod shell;
 mod game;
 
 use core::panic::PanicInfo;
@@ -28,5 +31,8 @@ fn panic(info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     let mut kernel = Kernel::new();
     kernel.initialize();
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
     kernel.run();
 }

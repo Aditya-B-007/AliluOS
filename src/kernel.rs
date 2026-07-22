@@ -4,19 +4,23 @@ use crate::keyboard::{Key, KeyEvent, Keyboard};
 pub struct Kernel {
     vga: VGA,
     keyboard: Keyboard,
+    shell: crate::shell::Shell,
 }
 
 impl Kernel {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             vga: VGA::new(),
-	    keyboard: Keyboard::new(),
+            keyboard: Keyboard::new(),
+            shell: crate::shell::Shell::new(),
         }
     }
 
     pub fn initialize(&mut self) {
         self.vga.init();
-	self.keyboard.init();
+        self.keyboard.init();
+        crate::interrupts::init();
+        crate::allocator::init_heap();
         self.boot_banner();
     }
 
@@ -71,27 +75,22 @@ impl Kernel {
     }
 
     fn handle_key_press(&mut self, key: Key) {
-    match key {
-        Key::Character(c) => {
-            self.vga.put_char(c);
-
+        match key {
+            Key::Character(c) => {
+                self.shell.handle_char(c);
+            }
+            Key::Space => {
+                self.shell.handle_space();
+            }
+            Key::Enter => {
+                self.shell.handle_enter();
+            }
+            Key::Backspace => {
+                self.shell.handle_backspace();
+            }
+            _ => {}
         }
-        Key::Space => {
-            self.vga.put_char(' ');
-        }
-        Key::Enter => {
-            self.vga.put_char('\n');
-            self.vga.write("> ");
-        }
-        Key::Backspace => {
-            self.vga.backspace();
-        }
-
-        _ => {}
-
     }
-
-  }
 
     
 }
