@@ -310,9 +310,9 @@ unsafe fn outb(port: u16, value: u8) {
 /// Naked functions do not generate prologues/epilogues, allowing precise assembly control.
 macro_rules! exception_handler {
     ($name:ident, $msg:expr) => {
-        #[naked]
+        #[unsafe(naked)]
         unsafe extern "C" fn $name() {
-            asm!(
+            core::arch::naked_asm!(
                 // Save caller-saved (volatile) registers
                 "push rax",
                 "push rcx",
@@ -337,7 +337,6 @@ macro_rules! exception_handler {
                 "pop rax",
                 "iretq", // Interrupt return (64-bit)
                 rust_handler = sym $name_inner,
-                options(noreturn)
             );
         }
 
@@ -358,9 +357,9 @@ exception_handler!(double_fault_handler, "Double Fault Exception (0x08)");
 
 /// Naked assembly handler for Page Fault exception.
 /// Page Faults push a custom error code onto the stack, and store the faulting virtual address in `cr2`.
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn page_fault_handler() {
-    asm!(
+    core::arch::naked_asm!(
         // Save register states
         "push rax",
         "push rcx",
@@ -386,7 +385,6 @@ unsafe extern "C" fn page_fault_handler() {
         "add rsp, 8", // Clear the CPU-pushed error code off the stack
         "iretq",      // Return from interrupt
         rust_handler = sym page_fault_inner,
-        options(noreturn)
     );
 }
 
@@ -413,9 +411,9 @@ extern "C" fn page_fault_inner(faulting_address: u64) {
 }
 
 /// Naked assembly wrapper for PIT Timer interrupt.
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn timer_interrupt_handler() {
-    asm!(
+    core::arch::naked_asm!(
         "push rax",
         "push rcx",
         "push rdx",
@@ -437,7 +435,6 @@ unsafe extern "C" fn timer_interrupt_handler() {
         "pop rax",
         "iretq",
         rust_handler = sym timer_interrupt_inner,
-        options(noreturn)
     );
 }
 
@@ -451,9 +448,9 @@ extern "C" fn timer_interrupt_inner() {
 }
 
 /// Naked assembly wrapper for PS/2 Keyboard interrupt.
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn keyboard_interrupt_handler() {
-    asm!(
+    core::arch::naked_asm!(
         "push rax",
         "push rcx",
         "push rdx",
@@ -475,7 +472,6 @@ unsafe extern "C" fn keyboard_interrupt_handler() {
         "pop rax",
         "iretq",
         rust_handler = sym keyboard_interrupt_inner,
-        options(noreturn)
     );
 }
 
