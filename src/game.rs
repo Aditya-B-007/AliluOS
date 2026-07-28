@@ -1,4 +1,5 @@
 use core::arch::asm;
+use alloc::vec::Vec;
 use crate::vga::{Color, WRITER};
 
 /// Polls the keyboard I/O port for a scancode without blocking.
