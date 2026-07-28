@@ -6,6 +6,9 @@ const BUFFER_ADDRESS: usize = 0xB8000;
 const BUFFER_WIDTH: usize = 80;
 const BUFFER_HEIGHT: usize = 25;
 
+/// Global synchronized VGA driver instance.
+pub static WRITER: Locked<VGA> = Locked::new(VGA::new());
+
 #[repr(u8)]
 #[derive(Clone, Copy)]
 pub enum Color {
@@ -146,9 +149,6 @@ impl VGA {
         }
     }
 
-
-    //Commands used by the methods above, and are not exposed to the external world.
-    
     fn newline(&mut self) {
         self.column = 0;
         if self.row < BUFFER_HEIGHT - 1 {
@@ -218,4 +218,72 @@ unsafe fn outb(port: u16, value: u8) {
         in("al") value,
         options(nostack, nomem)
     );
+}
+
+pub struct Locked<T> {
+    inner: spin::Mutex<T>,
+}
+
+impl<T> Locked<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            inner: spin::Mutex::new(value),
+        }
+    }
+
+    pub fn lock(&self) -> spin::MutexGuard<T> {
+        self.inner.lock()
+    }
+}
+
+mod spin {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::cell::UnsafeCell;
+    use core::ops::{Deref, DerefMut};
+
+    pub struct Mutex<T> {
+        locked: AtomicBool,
+        value: UnsafeCell<T>,
+    }
+
+    unsafe impl<T: Send> Sync for Mutex<T> {}
+
+    impl<T> Mutex<T> {
+        pub const fn new(value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                value: UnsafeCell::new(value),
+            }
+        }
+
+        pub fn lock(&self) -> MutexGuard<T> {
+            while self.locked.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+                core::hint::spin_loop();
+            }
+            MutexGuard { mutex: self }
+        }
+    }
+
+    pub struct MutexGuard<'a, T> {
+        mutex: &'a Mutex<T>,
+    }
+
+    impl<'a, T> Deref for MutexGuard<'a, T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            unsafe { &*self.mutex.value.get() }
+        }
+    }
+
+    impl<'a, T> DerefMut for MutexGuard<'a, T> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            unsafe { &mut *self.mutex.value.get() }
+        }
+    }
+
+    impl<'a, T> Drop for MutexGuard<'a, T> {
+        fn drop(&mut self) {
+            self.mutex.locked.store(false, Ordering::Release);
+        }
+    }
 }

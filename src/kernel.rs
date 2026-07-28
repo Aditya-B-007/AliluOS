@@ -1,8 +1,7 @@
-use crate::vga::{Color, VGA};
+use crate::vga::{Color, WRITER};
 use crate::keyboard::{Key, KeyEvent, Keyboard};
 
 pub struct Kernel {
-    vga: VGA,
     keyboard: Keyboard,
     shell: crate::shell::Shell,
 }
@@ -10,14 +9,13 @@ pub struct Kernel {
 impl Kernel {
     pub fn new() -> Self {
         Self {
-            vga: VGA::new(),
             keyboard: Keyboard::new(),
             shell: crate::shell::Shell::new(),
         }
     }
 
     pub fn initialize(&mut self) {
-        self.vga.init();
+        WRITER.lock().init();
         self.keyboard.init();
         crate::interrupts::init();
         crate::allocator::init_heap();
@@ -25,24 +23,12 @@ impl Kernel {
     }
 
     /// Main kernel execution loop.
-    ///
-    /// For now this simply idles forever.
-    /// Later this will become:
-    /// - Read Keyboard
-    /// - Parse Commands
-    /// - Execute Commands
-    /// - Update Display
-
-    
     pub fn run(&mut self) -> ! {
-    loop {
-        if let Some(event) = self.keyboard.read_key() {
-            self.handle_key_event(event);
-
-           }
-
+        loop {
+            if let Some(event) = self.keyboard.read_key() {
+                self.handle_key_event(event);
+            }
         }
-
     }
 
     // ----------------------------------------------------
@@ -51,27 +37,28 @@ impl Kernel {
 
     /// Displays the boot banner.
     fn boot_banner(&mut self) {
-        self.vga.set_color(Color::LightGreen, Color::Black);
+        let mut vga = WRITER.lock();
+        vga.set_color(Color::LightGreen, Color::Black);
 
-        self.vga.println("========================================");
-        self.vga.println("          Welcome to AliluOS");
-        self.vga.println("========================================");
+        vga.println("========================================");
+        vga.println("          Welcome to AliluOS");
+        vga.println("========================================");
 
-        self.vga.set_color(Color::White, Color::Black);
+        vga.set_color(Color::White, Color::Black);
 
-        self.vga.println("");
-        self.vga.println("Kernel Initialized Successfully.");
-        self.vga.println("");
-        self.vga.write("> ");
+        vga.println("");
+        vga.println("Kernel Initialized Successfully.");
+        vga.println("");
+        vga.write("> ");
     }
 
     fn handle_key_event(&mut self, event: KeyEvent) {
-    match event {
-        KeyEvent::Press(key) => {
-            self.handle_key_press(key);
+        match event {
+            KeyEvent::Press(key) => {
+                self.handle_key_press(key);
+            }
+            KeyEvent::Release(_) => {}
         }
-        KeyEvent::Release(_) => {}
-       }
     }
 
     fn handle_key_press(&mut self, key: Key) {
@@ -88,9 +75,10 @@ impl Kernel {
             Key::Backspace => {
                 self.shell.handle_backspace();
             }
+            Key::Escape => {
+                self.shell.handle_escape();
+            }
             _ => {}
         }
     }
-
-    
 }

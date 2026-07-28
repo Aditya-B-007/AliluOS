@@ -1,6 +1,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::vga::{Color, VGA};
+use crate::vga::{Color, WRITER, VGA};
 use crate::fs::{FS, Node};
 
 /// State representing if the shell is in command entry mode or file editing mode.
@@ -16,6 +16,7 @@ pub struct Shell {
     editor_filename: String,    // Name of file currently being edited
     editor_buffer: String,      // Buffer storing accumulating text in editor mode
     cwd: Vec<String>,           // Current Working Directory path segments
+    in_help_mode: bool,         // Flag tracking if shell is currently displaying help text
 }
 
 impl Shell {
@@ -26,12 +27,30 @@ impl Shell {
             editor_filename: String::new(),
             editor_buffer: String::new(),
             cwd: Vec::new(), // Empty segments list represents root "/"
+            in_help_mode: false,
+        }
+    }
+
+    /// Handles Escape key press to dismiss help screens or reset input.
+    pub fn handle_escape(&mut self) {
+        let mut vga = WRITER.lock();
+        if self.in_help_mode {
+            self.in_help_mode = false;
+            vga.println("");
+            vga.set_color(Color::LightGreen, Color::Black);
+            vga.println("[Exited help view]");
+            vga.set_color(Color::White, Color::Black);
+            vga.write("> ");
+        } else if self.mode == ShellMode::Command && !self.buffer.is_empty() {
+            self.buffer.clear();
+            vga.println("^C");
+            vga.write("> ");
         }
     }
 
     /// Handles a character input, routing depending on the current active shell mode.
     pub fn handle_char(&mut self, c: char) {
-        let mut vga = VGA::new();
+        let mut vga = WRITER.lock();
         match self.mode {
             ShellMode::Command => {
                 self.buffer.push(c);
@@ -46,7 +65,7 @@ impl Shell {
 
     /// Handles a backspace input, adjusting internal buffers and screen visuals.
     pub fn handle_backspace(&mut self) {
-        let mut vga = VGA::new();
+        let mut vga = WRITER.lock();
         match self.mode {
             ShellMode::Command => {
                 if !self.buffer.is_empty() {
@@ -65,7 +84,7 @@ impl Shell {
 
     /// Handles space key inputs.
     pub fn handle_space(&mut self) {
-        let mut vga = VGA::new();
+        let mut vga = WRITER.lock();
         match self.mode {
             ShellMode::Command => {
                 self.buffer.push(' ');
@@ -80,16 +99,18 @@ impl Shell {
 
     /// Handles when the Enter key is pressed.
     pub fn handle_enter(&mut self) {
-        let mut vga = VGA::new();
+        let mut vga = WRITER.lock();
         vga.put_char('\n');
 
         match self.mode {
             ShellMode::Command => {
                 let cmd_str = self.buffer.clone();
                 self.buffer.clear();
+                // Release lock before executing command so execute_command can acquire WRITER lock
+                drop(vga);
                 self.execute_command(&cmd_str);
                 if self.mode == ShellMode::Command {
-                    vga.write("> ");
+                    WRITER.lock().write("> ");
                 }
             }
             ShellMode::Editor => {
@@ -170,10 +191,49 @@ impl Shell {
         let command = parts.next().unwrap_or("");
         let args: Vec<&str> = parts.collect();
 
-        let mut vga = VGA::new();
+        // Check for --help flag across any command
+        if args.contains(&"--help") || args.contains(&"-h") {
+            self.in_help_mode = true;
+            let mut vga = WRITER.lock();
+            vga.set_color(Color::LightCyan, Color::Black);
+            vga.write("Help for command '");
+            vga.write(command);
+            vga.println("':");
+            vga.set_color(Color::White, Color::Black);
+            match command {
+                "help" => vga.println("  help                       - Show overall available system commands"),
+                "clear" => vga.println("  clear                      - Clear display screen"),
+                "system" => vga.println("  system                     - Show system specifications & stats"),
+                "tasks" => vga.println("  tasks                      - List current running CPU tasks"),
+                "list" => vga.println("  list                       - List files/folders in current directory"),
+                "directory" => vga.println("  directory                  - Show current working directory path"),
+                "enter" => vga.println("  enter [path]               - Enter a subfolder or path (CD)"),
+                "folder" => vga.println("  folder [name]              - Create a new directory folder"),
+                "create" => vga.println("  create [file]              - Create a text/source code file"),
+                "write" => vga.println("  write [file] [text]        - Write or overwrite text in a file"),
+                "read" => vga.println("  read [file]                - Print contents of a file"),
+                "delete" => vga.println("  delete [file/folder]       - Delete a file or directory"),
+                "edit" => vga.println("  edit [file]                - Enter interactive text editor"),
+                "play" => vga.println("  play [atari / chess]       - Launch built-in game"),
+                "draw" => vga.println("  draw                       - Launch drawing canvas tool"),
+                "echo" => vga.println("  echo [text]                - Print text back to screen"),
+                _ => {
+                    vga.write("  ");
+                    vga.write(command);
+                    vga.println(" - Custom command");
+                }
+            }
+            vga.set_color(Color::DarkGray, Color::Black);
+            vga.println("(Press [Escape] to exit help view)");
+            vga.set_color(Color::White, Color::Black);
+            return;
+        }
+
+        let mut vga = WRITER.lock();
 
         match command {
             "help" => {
+                self.in_help_mode = true;
                 vga.set_color(Color::LightCyan, Color::Black);
                 vga.println("Available Plain-English Commands:");
                 vga.set_color(Color::White, Color::Black);
@@ -192,6 +252,9 @@ impl Shell {
                 vga.println("  edit [file]                - Enter interactive text editor");
                 vga.println("  play                       - Launch built-in game");
                 vga.println("  echo [text]                - Print text back to screen");
+                vga.set_color(Color::DarkGray, Color::Black);
+                vga.println("(Press [Escape] to exit help view)");
+                vga.set_color(Color::White, Color::Black);
             }
             "clear" => {
                 vga.clear();
@@ -440,13 +503,15 @@ impl Shell {
                     vga.println("Usage: play [atari / chess]");
                     return;
                 }
+                drop(vga);
                 match args[0] {
                     "atari" => crate::game::start_atari(),
                     "chess" => crate::game::start_chess(),
-                    _ => vga.println("Unknown game. Choose 'atari' or 'chess'."),
+                    _ => WRITER.lock().println("Unknown game. Choose 'atari' or 'chess'."),
                 }
             }
             "draw" => {
+                drop(vga);
                 crate::game::start_canvas();
             }
             "echo" => {

@@ -1,6 +1,5 @@
 use core::arch::asm;
-use alloc::vec::Vec;
-use crate::vga::{Color, VGA};
+use crate::vga::{Color, WRITER};
 
 /// Polls the keyboard I/O port for a scancode without blocking.
 /// Returns Some(scancode) if a key is available, or None.
@@ -69,7 +68,7 @@ fn scancode_to_char(code: u8, shift: bool) -> Option<char> {
 /// Launches the full-screen Drawing Canvas.
 /// Background is pure black, drawings are white.
 pub fn start_canvas() {
-    let mut vga = VGA::new();
+    let mut vga = WRITER.lock();
     vga.clear();
     vga.set_color(Color::White, Color::Black);
 
@@ -77,8 +76,9 @@ pub fn start_canvas() {
     vga.println("Use Arrow keys to move cursor.");
     vga.println("Space = Draw White Dot | Backspace/E = Erase | Escape = Exit");
     vga.println("Press any key to start...");
+    drop(vga);
     read_scancode_blocking();
-    vga.clear();
+    WRITER.lock().clear();
 
     let mut cursor_x = 40;
     let mut cursor_y = 12;
@@ -88,13 +88,16 @@ pub fn start_canvas() {
 
     loop {
         // Redraw persistent canvas grid
-        for y in 0..25 {
-            for x in 0..80 {
-                // If cursor is on this position, show a blinking/highlighted character
-                if x == cursor_x && y == cursor_y {
-                    vga.put_char_at(y, x, '+');
-                } else {
-                    vga.put_char_at(y, x, grid[y * 80 + x] as char);
+        {
+            let vga = WRITER.lock();
+            for y in 0..25 {
+                for x in 0..80 {
+                    // If cursor is on this position, show a blinking/highlighted character
+                    if x == cursor_x && y == cursor_y {
+                        vga.put_char_at(y, x, '+');
+                    } else {
+                        vga.put_char_at(y, x, grid[y * 80 + x] as char);
+                    }
                 }
             }
         }
@@ -123,7 +126,7 @@ pub fn start_canvas() {
             _ => {}
         }
     }
-    vga.clear();
+    WRITER.lock().clear();
 }
 
 // ----------------------------------------------------
@@ -132,16 +135,18 @@ pub fn start_canvas() {
 
 /// Launches the full-screen Atari Breakout game.
 pub fn start_atari() {
-    let mut vga = VGA::new();
-    vga.clear();
-    vga.set_color(Color::White, Color::Black);
+    {
+        let mut vga = WRITER.lock();
+        vga.clear();
+        vga.set_color(Color::White, Color::Black);
 
-    vga.println("=== ATARI BREAKOUT ===");
-    vga.println("Left/Right Arrow keys = Move Paddle");
-    vga.println("Escape = Exit");
-    vga.println("Press any key to start...");
+        vga.println("=== ATARI BREAKOUT ===");
+        vga.println("Left/Right Arrow keys = Move Paddle");
+        vga.println("Escape = Exit");
+        vga.println("Press any key to start...");
+    }
     read_scancode_blocking();
-    vga.clear();
+    WRITER.lock().clear();
 
     let mut paddle_x = 35; // Paddle center
     let paddle_width = 10;
@@ -152,63 +157,76 @@ pub fn start_atari() {
     let mut ball_dy = -1;
 
     let mut score = 0;
-    let mut lives = 3;
+    let mut game_over = false;
 
-    // Bricks grid (5 rows, 10 columns of bricks)
-    // Brick width is 6 chars, spaced.
-    let mut bricks = [true; 50]; 
+    // Bricks grid (5 rows x 10 columns)
+    let mut bricks = [true; 50];
 
     loop {
-        // Clear frame buffer
-        vga.clear();
+        {
+            let mut vga = WRITER.lock();
+            vga.clear();
 
-        // 1. Draw Bricks
-        for row in 0..5 {
-            for col in 0..10 {
-                if bricks[row * 10 + col] {
-                    vga.set_color(Color::LightGray, Color::Black);
-                    let start_x = 10 + col * 6;
-                    let start_y = 3 + row;
-                    for offset in 0..5 {
-                        vga.put_char_at(start_y, start_x + offset, '=');
+            // Draw Bricks
+            for r in 0..5 {
+                let color = match r {
+                    0 => Color::Red,
+                    1 => Color::LightRed,
+                    2 => Color::Yellow,
+                    3 => Color::Green,
+                    _ => Color::Cyan,
+                };
+                vga.set_color(color, Color::Black);
+
+                for c in 0..10 {
+                    if bricks[r * 10 + c] {
+                        let brick_start = 5 + c * 7;
+                        for i in 0..6 {
+                            vga.put_char_at(2 + r, brick_start + i, '=');
+                        }
                     }
                 }
             }
-        }
 
-        vga.set_color(Color::White, Color::Black);
-
-        // 2. Draw Score & Interface
-        vga.put_char_at(1, 2, 'S');
-        vga.put_char_at(1, 3, 'C');
-        vga.put_char_at(1, 4, 'O');
-        vga.put_char_at(1, 5, 'R');
-        vga.put_char_at(1, 6, 'E');
-        vga.put_char_at(1, 7, ':');
-        print_num_at(1, 9, score, &vga);
-
-        vga.put_char_at(1, 70, 'L');
-        vga.put_char_at(1, 71, 'I');
-        vga.put_char_at(1, 72, 'V');
-        vga.put_char_at(1, 73, 'E');
-        vga.put_char_at(1, 74, 'S');
-        vga.put_char_at(1, 75, ':');
-        vga.put_char_at(1, 77, (b'0' + lives as u8) as char);
-
-        // 3. Draw Paddle
-        for offset in 0..paddle_width {
-            let px = paddle_x + offset;
-            if px < 80 {
-                vga.put_char_at(22, px, '=');
+            // Draw Paddle
+            vga.set_color(Color::LightBlue, Color::Black);
+            for i in 0..paddle_width {
+                vga.put_char_at(23, paddle_x + i, '=');
             }
+
+            // Draw Ball
+            vga.set_color(Color::White, Color::Black);
+            vga.put_char_at(ball_y, ball_x, 'O');
+
+            // Draw Score
+            vga.put_char_at(0, 2, 'S');
+            vga.put_char_at(0, 3, 'C');
+            vga.put_char_at(0, 4, 'O');
+            vga.put_char_at(0, 5, 'R');
+            vga.put_char_at(0, 6, 'E');
+            vga.put_char_at(0, 7, ':');
+            print_num_at(0, 9, score);
         }
 
-        // 4. Draw Ball
-        vga.put_char_at(ball_y, ball_x, 'O');
+        if game_over {
+            let mut vga = WRITER.lock();
+            vga.set_color(Color::LightRed, Color::Black);
+            vga.put_char_at(12, 33, 'G');
+            vga.put_char_at(12, 34, 'A');
+            vga.put_char_at(12, 35, 'M');
+            vga.put_char_at(12, 36, 'E');
+            vga.put_char_at(12, 37, ' ');
+            vga.put_char_at(12, 38, 'O');
+            vga.put_char_at(12, 39, 'V');
+            vga.put_char_at(12, 40, 'E');
+            vga.put_char_at(12, 41, 'R');
+            delay(10000000);
+            break;
+        }
 
-        // Check controls (Non-blocking poll)
-        if let Some(scancode) = poll_scancode() {
-            match scancode {
+        // Non-blocking poll for input
+        if let Some(code) = poll_scancode() {
+            match code {
                 0x01 => break, // Escape: Exit
                 0x4B => { // Left Arrow
                     if paddle_x > 2 { paddle_x -= 3; }
@@ -220,89 +238,49 @@ pub fn start_atari() {
             }
         }
 
-        // Delay physics ticks
-        delay(4000000);
+        // Update Ball Position
+        let next_x = (ball_x as isize + ball_dx) as usize;
+        let next_y = (ball_y as isize + ball_dy) as usize;
 
-        // 5. Physics: Ball movement
-        ball_x = (ball_x as i32 + ball_dx) as usize;
-        ball_y = (ball_y as i32 + ball_dy) as usize;
-
-        // Bounce walls
-        if ball_x <= 1 {
-            ball_x = 2;
-            ball_dx = -ball_dx;
-        } else if ball_x >= 78 {
-            ball_x = 77;
+        // Wall collisions
+        if next_x <= 1 || next_x >= 78 {
             ball_dx = -ball_dx;
         }
-
-        if ball_y <= 2 {
-            ball_y = 3;
+        if next_y <= 1 {
             ball_dy = -ball_dy;
+        } else if next_y >= 23 {
+            // Paddle collision check
+            if next_x >= paddle_x && next_x <= paddle_x + paddle_width {
+                ball_dy = -ball_dy;
+            } else {
+                game_over = true;
+            }
         }
 
-        // Brick collision
-        if ball_y >= 3 && ball_y < 8 {
-            let row = ball_y - 3;
-            if ball_x >= 10 && ball_x < 70 {
-                let col = (ball_x - 10) / 6;
-                let idx = row * 10 + col;
-                if idx < 50 && bricks[idx] {
-                    bricks[idx] = false;
+        // Brick collision check
+        if next_y >= 2 && next_y < 7 {
+            let r = next_y - 2;
+            if next_x >= 5 && next_x < 75 {
+                let c = (next_x - 5) / 7;
+                if c < 10 && bricks[r * 10 + c] {
+                    bricks[r * 10 + c] = false;
                     ball_dy = -ball_dy;
                     score += 10;
                 }
             }
         }
 
-        // Paddle collision
-        if ball_y == 22 {
-            if ball_x >= paddle_x && ball_x <= paddle_x + paddle_width {
-                ball_dy = -ball_dy;
-                // Add slight angle variance depending on where it hits paddle
-                if ball_x < paddle_x + 3 {
-                    ball_dx = -1;
-                } else if ball_x > paddle_x + 7 {
-                    ball_dx = 1;
-                }
-            }
-        }
+        ball_x = (ball_x as isize + ball_dx) as usize;
+        ball_y = (ball_y as isize + ball_dy) as usize;
 
-        // Missed ball
-        if ball_y >= 24 {
-            lives -= 1;
-            if lives == 0 {
-                vga.clear();
-                vga.set_color(Color::LightRed, Color::Black);
-                vga.println("\n=== GAME OVER ===");
-                vga.write("Final Score: ");
-                print_num_at(3, 14, score, &vga);
-                vga.println("\nPress any key to return to shell...");
-                read_scancode_blocking();
-                break;
-            }
-            // Reset ball
-            ball_x = paddle_x + paddle_width / 2;
-            ball_y = 20;
-            ball_dy = -1;
-        }
-
-        // Win check
-        if score >= 500 {
-            vga.clear();
-            vga.set_color(Color::LightGreen, Color::Black);
-            vga.println("\n=== YOU WIN! ===");
-            vga.println("Excellent job! You destroyed all bricks.");
-            vga.println("\nPress any key to return to shell...");
-            read_scancode_blocking();
-            break;
-        }
+        delay(1500000);
     }
-    vga.clear();
+    WRITER.lock().clear();
 }
 
 // Helper to print positive numbers on VGA
-fn print_num_at(row: usize, col: usize, val: usize, vga: &VGA) {
+fn print_num_at(row: usize, col: usize, val: usize) {
+    let vga = WRITER.lock();
     let mut temp = val;
     if temp == 0 {
         vga.put_char_at(row, col, '0');
@@ -349,15 +327,17 @@ struct ChessPiece {
 
 /// Launches the full-screen two-player Chess game.
 pub fn start_chess() {
-    let mut vga = VGA::new();
-    vga.clear();
-    vga.set_color(Color::White, Color::Black);
+    {
+        let mut vga = WRITER.lock();
+        vga.clear();
+        vga.set_color(Color::White, Color::Black);
 
-    vga.println("=== CHESS ===");
-    vga.println("Two-Player mode.");
-    vga.println("Move inputs are algebraic coordinates (e.g., 'e2e4' or 'b1c3').");
-    vga.println("Type 'exit' to quit back to shell.");
-    vga.println("Press any key to start...");
+        vga.println("=== CHESS ===");
+        vga.println("Two-Player mode.");
+        vga.println("Move inputs are algebraic coordinates (e.g., 'e2e4' or 'b1c3').");
+        vga.println("Type 'exit' to quit back to shell.");
+        vga.println("Press any key to start...");
+    }
     read_scancode_blocking();
 
     // Default Chess Board setup
@@ -376,48 +356,51 @@ pub fn start_chess() {
     let mut input_buffer = alloc::string::String::new();
 
     loop {
-        vga.clear();
-        draw_board(&board, &mut vga);
+        WRITER.lock().clear();
+        draw_board(&board);
 
-        // Instructions and turn information
-        vga.set_color(Color::LightCyan, Color::Black);
-        vga.put_char_at(3, 45, 'T');
-        vga.put_char_at(3, 46, 'U');
-        vga.put_char_at(3, 47, 'R');
-        vga.put_char_at(3, 48, 'N');
-        vga.put_char_at(3, 49, ':');
-        if turn == ChessColor::White {
+        {
+            let mut vga = WRITER.lock();
+            // Instructions and turn information
+            vga.set_color(Color::LightCyan, Color::Black);
+            vga.put_char_at(3, 45, 'T');
+            vga.put_char_at(3, 46, 'U');
+            vga.put_char_at(3, 47, 'R');
+            vga.put_char_at(3, 48, 'N');
+            vga.put_char_at(3, 49, ':');
+            if turn == ChessColor::White {
+                vga.set_color(Color::White, Color::Black);
+                vga.put_char_at(3, 51, 'W');
+                vga.put_char_at(3, 52, 'h');
+                vga.put_char_at(3, 53, 'i');
+                vga.put_char_at(3, 54, 't');
+                vga.put_char_at(3, 55, 'e');
+            } else {
+                vga.set_color(Color::LightGray, Color::Black);
+                vga.put_char_at(3, 51, 'B');
+                vga.put_char_at(3, 52, 'l');
+                vga.put_char_at(3, 53, 'a');
+                vga.put_char_at(3, 54, 'c');
+                vga.put_char_at(3, 55, 'k');
+            }
+
             vga.set_color(Color::White, Color::Black);
-            vga.put_char_at(3, 51, 'W');
-            vga.put_char_at(3, 52, 'h');
-            vga.put_char_at(3, 53, 'i');
-            vga.put_char_at(3, 54, 't');
-            vga.put_char_at(3, 55, 'e');
-        } else {
-            vga.set_color(Color::LightGray, Color::Black);
-            vga.put_char_at(3, 51, 'B');
-            vga.put_char_at(3, 52, 'l');
-            vga.put_char_at(3, 53, 'a');
-            vga.put_char_at(3, 54, 'c');
-            vga.put_char_at(3, 55, 'k');
-        }
+            vga.put_char_at(20, 2, 'Y');
+            vga.put_char_at(20, 3, 'o');
+            vga.put_char_at(20, 4, 'u');
+            vga.put_char_at(20, 5, 'r');
+            vga.put_char_at(20, 6, ' ');
+            vga.put_char_at(20, 7, 'M');
+            vga.put_char_at(20, 8, 'o');
+            vga.put_char_at(20, 9, 'v');
+            vga.put_char_at(20, 10, 'e');
+            vga.put_char_at(20, 11, ':');
+            vga.put_char_at(20, 13, ' ');
 
-        vga.set_color(Color::White, Color::Black);
-        vga.put_char_at(20, 2, 'Y');
-        vga.put_char_at(20, 3, 'o');
-        vga.put_char_at(20, 4, 'u');
-        vga.put_char_at(20, 5, 'r');
-        vga.put_char_at(20, 6, ' ');
-        vga.put_char_at(20, 7, 'M');
-        vga.put_char_at(20, 8, 'o');
-        vga.put_char_at(20, 9, 'v');
-        vga.put_char_at(20, 10, 'e');
-        vga.put_char_at(20, 11, ':');
-        vga.put_char_at(20, 13, ' ');
-
-        // Draw current input string on screen
-        for (i, c) in input_buffer.chars().enumerate() {
-            vga.put_char_at(20, 14 + i, c);
+            // Draw current input string on screen
+            for (i, c) in input_buffer.chars().enumerate() {
+                vga.put_char_at(20, 14 + i, c);
+            }
         }
 
         // Wait for key
@@ -460,11 +443,13 @@ pub fn start_chess() {
             }
         }
     }
-    vga.clear();
+    WRITER.lock().clear();
 }
 
 /// Renders the chess board onto the screen.
-fn draw_board(board: &[[ChessPiece; 8]; 8], vga: &mut VGA) {
+
+fn draw_board(board: &[[ChessPiece; 8]; 8]) {
+    let mut vga = WRITER.lock();
     vga.set_color(Color::White, Color::Black);
     
     // Draw columns letters
