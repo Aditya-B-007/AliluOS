@@ -1,8 +1,14 @@
 #![allow(dead_code)]
 
 use core::arch::asm;
-///Remember to switch to IRQ1 when interrupt is introduced. Uses PS/2 controller.
+
 /// High-level key values returned by the keyboard driver.
+///
+/// WHAT IT DOES:
+/// Maps raw hardware PS/2 scan codes into strongly-typed enumeration values representing specific keyboard keys.
+///
+/// WHY IT DOES IT:
+/// Decouples hardware-specific scan code bytes from high-level kernel logic and shell event handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Character(char),
@@ -38,13 +44,26 @@ pub enum Key {
     Unknown,
 }
 
-/// Press/Release event.
+/// Press/Release key event representation.
+///
+/// WHAT IT DOES:
+/// Indicates whether a key action was a key depression (press) or key release.
+///
+/// WHY IT DOES IT:
+/// Allows the shell and kernel to react to key presses (typing) and track modifier state changes accurately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEvent {
     Press(Key),
     Release(Key),
 }
 
+/// Hardware PS/2 Keyboard Driver state manager.
+///
+/// WHAT IT DOES:
+/// Manages modifier key state (Shift, Ctrl, Alt, CapsLock) and translates raw scancodes into `KeyEvent` instances.
+///
+/// WHY IT DOES IT:
+/// Provides a clean non-blocking API (`read_key`) for the kernel main loop to consume keystrokes.
 pub struct Keyboard {
     shift: bool,
     ctrl: bool,
@@ -56,6 +75,7 @@ pub struct Keyboard {
 }
 
 impl Keyboard {
+    /// Creates a new Keyboard driver instance with default modifier states (all unpressed).
     pub const fn new() -> Self {
         Self {
             shift: false,
@@ -67,10 +87,15 @@ impl Keyboard {
         }
     }
 
+    /// Initializes keyboard driver state.
+    ///
+    /// WHAT IT DOES: Resets all modifier toggles to false.
+    /// WHY IT DOES IT: Guarantees a clean, predictable keyboard state upon kernel boot.
     pub fn init(&mut self) {
         self.reset();
     }
 
+    /// Resets modifier keys (Shift, Ctrl, Alt, CapsLock).
     pub fn reset(&mut self) {
         self.shift = false;
         self.ctrl = false;
@@ -86,17 +111,35 @@ impl Keyboard {
     pub fn is_ctrl_pressed(&self) -> bool { self.ctrl }
     pub fn is_alt_pressed(&self) -> bool { self.alt }
 
-    /// Polls the keyboard controller.
-    /// Returns None when no key is available.
+    /// Polls for the next available keyboard event.
+    ///
+    /// WHAT IT DOES:
+    /// 1. First attempts to pop a scancode from the IRQ1 interrupt ring buffer (`pop_scancode()`).
+    /// 2. If ring buffer is empty, polls PS/2 port 0x64 status register directly as a fallback.
+    /// 3. Translates the scancode into a `KeyEvent` (Press or Release).
+    ///
+    /// WHY IT DOES IT:
+    /// Guarantees that keystrokes pushed by the hardware interrupt handler are consumed smoothly
+    /// without missing any characters or suffering from keyboard port stalls during continuous typing.
     pub fn read_key(&mut self) -> Option<KeyEvent> {
-        if !self.output_ready() {
-            return None;
+        // Priority 1: Read scancodes collected by IRQ1 interrupt handler
+        if let Some(scancode) = crate::interrupts::pop_scancode() {
+            return Some(self.translate(scancode));
         }
 
-        let scancode = self.read_scancode();
-        Some(self.translate(scancode))
+        // Priority 2: Fallback polling of PS/2 hardware output status
+        if self.output_ready() {
+            let scancode = self.read_scancode();
+            return Some(self.translate(scancode));
+        }
+
+        None
     }
 
+    /// Checks if PS/2 Controller output buffer has a pending byte ready.
+    ///
+    /// WHAT IT DOES: Reads I/O port 0x64 and tests bit 0 (Output Buffer Full).
+    /// WHY IT DOES IT: Prevents reading garbage or stalling when no key has been pressed.
     fn output_ready(&self) -> bool {
         unsafe {
             let mut status: u8;
@@ -110,6 +153,7 @@ impl Keyboard {
         }
     }
 
+    /// Reads raw scancode byte directly from PS/2 data port 0x60.
     fn read_scancode(&self) -> u8 {
         unsafe {
             let mut value: u8;
@@ -123,6 +167,13 @@ impl Keyboard {
         }
     }
 
+    /// Translates raw 1-byte PS/2 Set 1 scancode into a `KeyEvent`.
+    ///
+    /// WHAT IT DOES:
+    /// Evaluates key release bit (0x80), maps scan code to key enumeration, and updates internal shift/caps state.
+    ///
+    /// WHY IT DOES IT:
+    /// Converts hardware-level bit patterns into semantic key events understood by the shell.
     fn translate(&mut self, scancode: u8) -> KeyEvent {
         let released = scancode & 0x80 != 0;
         let code = scancode & 0x7F;
@@ -213,6 +264,7 @@ impl Keyboard {
         }
     }
 
+    /// Handles casing transformation for alphabet characters based on Shift and CapsLock state.
     fn letter(&self, c: char) -> char {
         let upper = self.shift ^ self.caps_lock;
         if upper {

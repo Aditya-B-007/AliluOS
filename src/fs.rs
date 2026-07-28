@@ -1,7 +1,20 @@
+//! # AliluOS B-Tree Filesystem Subsystem (`fs.rs`)
+//!
+//! - **WHAT**: Hierarchical memory filesystem using a B-Tree index structure (`BTreeMap<String, Node>`).
+//! - **WHY**: Provides fast, logarithmic ($O(\log N)$) sorted directory searches, insertions, and deletions,
+//!   establishing the core B-Tree directory indexing layout required for upcoming secondary memory disk block persistence.
+//! - **WHEN**: Executed when shell commands (`create`, `folder`, `write`, `read`, `list`, `delete`, `edit`) query or modify files.
+//! - **HOW**: Thread-safely wrapped in `pub static FS: Locked<FileSystem>`. Operations traverse path segments recursively over nested `DirectoryNode` B-Tree maps.
+
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
 
-/// A node in our hierarchical filesystem directory tree.
+/// Enumeration representing a node in the filesystem directory tree.
+///
+/// - **WHAT**: Sum type representing either a `FileNode` or a `DirectoryNode`.
+/// - **WHY**: Allows subdirectories and files to be stored uniformly within `BTreeMap<String, Node>`.
+/// - **WHEN**: Evaluated when listing, inspecting, or traversing directory trees.
 #[derive(Clone)]
 pub enum Node {
     File(FileNode),
@@ -9,7 +22,7 @@ pub enum Node {
 }
 
 impl Node {
-    /// Returns the name of the node.
+    /// Returns the human-readable string name of the node.
     pub fn name(&self) -> &str {
         match self {
             Node::File(f) => &f.name,
@@ -17,44 +30,58 @@ impl Node {
         }
     }
 
-    /// Helper to check if a node is a directory.
+    /// Returns `true` if this node is a `DirectoryNode`.
     pub fn is_directory(&self) -> bool {
         matches!(self, Node::Directory(_))
     }
 }
 
-/// Node representing a standard file.
+/// Represents a standard text/binary file node.
+///
+/// - **WHAT**: Stores filename, UTF-8 text content, and creation timer ticks.
+/// - **WHY**: Holds actual file payload created by `create`, `write`, or `edit`.
 #[derive(Clone)]
 pub struct FileNode {
     pub name: String,
     pub content: String,
-    pub created_at: u64, // Stored system timer ticks at creation
+    pub created_at: u64,
 }
 
-/// Node representing a directory containing files or nested subdirectories.
+/// Directory Node with B-Tree Entry Indexing.
+///
+/// - **WHAT**: Represents a folder containing a `BTreeMap<String, Node>` index of child files and subdirectories.
+/// - **WHY**: Replaces linear flat arrays (`Vec<Node>`) with a B-Tree structure, providing sorted keys and logarithmic search efficiency ($O(\log N)$).
+/// - **WHEN**: Traversed during path resolution and modified during folder/file creation and deletion.
+/// - **HOW**: Keyed by string entry names (`String`), storing `Node` instances as values.
 #[derive(Clone)]
 pub struct DirectoryNode {
     pub name: String,
-    pub children: Vec<Node>,
+    pub children: BTreeMap<String, Node>,
     pub created_at: u64,
 }
 
 impl DirectoryNode {
+    /// Constructs a new empty `DirectoryNode`.
     pub fn new(name: &str, ticks: u64) -> Self {
         Self {
             name: String::from(name),
-            children: Vec::new(),
+            children: BTreeMap::new(),
             created_at: ticks,
         }
     }
 
-    /// Recursively finds a reference to a node given a slice of path segments.
+    /// Recursively looks up an immutable node reference along path segments using B-Tree lookups.
+    ///
+    /// - **WHAT**: Traverses directory hierarchy following path segments (e.g. `["docs", "sub", "file.txt"]`).
+    /// - **WHY**: Enables immutable operations like `read_file` or `list_directory`.
+    /// - **WHEN**: Invoked during file reads or directory listings.
+    /// - **HOW**: Uses `BTreeMap::get()` at each level, descending recursively until the target is reached.
     pub fn find_node(&self, path: &[&str]) -> Option<&Node> {
         if path.is_empty() {
             return None;
         }
         let next_segment = path[0];
-        let child = self.children.iter().find(|c| c.name() == next_segment)?;
+        let child = self.children.get(next_segment)?;
         if path.len() == 1 {
             Some(child)
         } else {
@@ -65,13 +92,18 @@ impl DirectoryNode {
         }
     }
 
-    /// Recursively finds a mutable reference to a node given a slice of path segments.
+    /// Recursively looks up a mutable node reference along path segments using B-Tree lookups.
+    ///
+    /// - **WHAT**: Traverses directory hierarchy returning `&mut Node`.
+    /// - **WHY**: Enables mutable operations like `write_file`, `create_file`, or `delete_node`.
+    /// - **WHEN**: Invoked during file writing, node creation, or node deletion.
+    /// - **HOW**: Uses `BTreeMap::get_mut()` at each level to traverse down the tree.
     pub fn find_node_mut(&mut self, path: &[&str]) -> Option<&mut Node> {
         if path.is_empty() {
             return None;
         }
         let next_segment = path[0];
-        let child = self.children.iter_mut().find(|c| c.name() == next_segment)?;
+        let child = self.children.get_mut(next_segment)?;
         if path.len() == 1 {
             Some(child)
         } else {
@@ -83,28 +115,34 @@ impl DirectoryNode {
     }
 }
 
-/// The overall Hierarchical Filesystem.
+/// The Overall Filesystem Tree State.
+///
+/// - **WHAT**: Holds the root directory node (`/`) of AliluOS.
+/// - **WHY**: Provides high-level path resolution, CRUD APIs, and directory traversal routines.
 pub struct FileSystem {
     pub root: DirectoryNode,
 }
 
 impl FileSystem {
     pub const fn new() -> Self {
-        // We start with an empty root directory "/"
         FileSystem {
             root: DirectoryNode {
-                name: String::new(), // root directory has empty name in path segments
-                children: Vec::new(),
+                name: String::new(),
+                children: BTreeMap::new(),
                 created_at: 0,
             },
         }
     }
 
-    /// Resolves path segments (absolute or relative to CWD) into reference path strings.
+    /// Resolves absolute (`/path`) or relative (`path`) string inputs against Current Working Directory (CWD).
+    ///
+    /// - **WHAT**: Converts path strings containing `/`, `.`, and `..` into a canonical vector of path segments.
+    /// - **WHY**: Normalizes user input paths so commands like `enter ..` or `create ./file` resolve correctly.
+    /// - **WHEN**: Called prior to any file/folder CRUD operation.
+    /// - **HOW**: Splits path string by `/`, handles `..` via `pop()`, and appends path elements to vector.
     pub fn resolve_path(&self, cwd: &[String], path: &str) -> Vec<String> {
         let mut segments = Vec::new();
 
-        // Check if path is absolute
         if path.starts_with('/') {
             // Absolute path: start from root
         } else {
@@ -112,7 +150,6 @@ impl FileSystem {
             segments.extend(cwd.iter().cloned());
         }
 
-        // Process path segments split by '/'
         for item in path.split('/') {
             if item.is_empty() || item == "." {
                 continue;
@@ -126,7 +163,7 @@ impl FileSystem {
         segments
     }
 
-    /// Helper to find a DirectoryNode reference by segments.
+    /// Finds immutable reference to target `DirectoryNode` by path segments.
     pub fn find_directory(&self, segments: &[String]) -> Option<&DirectoryNode> {
         if segments.is_empty() {
             return Some(&self.root);
@@ -138,7 +175,7 @@ impl FileSystem {
         }
     }
 
-    /// Helper to find a mutable DirectoryNode reference by segments.
+    /// Finds mutable reference to target `DirectoryNode` by path segments.
     pub fn find_directory_mut(&mut self, segments: &[String]) -> Option<&mut DirectoryNode> {
         if segments.is_empty() {
             return Some(&mut self.root);
@@ -150,12 +187,16 @@ impl FileSystem {
         }
     }
 
-    /// Lists child names of the directory specified by segments.
+    /// Lists directory entries in alphabetical B-Tree sorted order.
+    ///
+    /// - **WHAT**: Returns vector of `(String, bool)` tuples representing child names and directory flags.
+    /// - **WHY**: Powered by `BTreeMap::iter()`, output is automatically sorted without requiring explicit sorting loops.
+    /// - **WHEN**: Triggered by shell `list` command.
     pub fn list_directory(&self, segments: &[String]) -> Result<Vec<(String, bool)>, &'static str> {
         if let Some(dir) = self.find_directory(segments) {
-            let list = dir.children.iter().map(|c| {
-                let is_dir = matches!(c, Node::Directory(_));
-                (String::from(c.name()), is_dir)
+            let list = dir.children.iter().map(|(name, node)| {
+                let is_dir = matches!(node, Node::Directory(_));
+                (name.clone(), is_dir)
             }).collect();
             Ok(list)
         } else {
@@ -163,26 +204,35 @@ impl FileSystem {
         }
     }
 
-    /// Creates a directory folder.
+    /// Creates a directory folder using B-Tree insertion.
+    ///
+    /// - **WHAT**: Inserts a new `DirectoryNode` into parent's `children` BTreeMap.
+    /// - **WHY**: Expands directory tree.
+    /// - **WHEN**: Triggered by shell `folder` command.
+    /// - **HOW**: Checks `parent.children.contains_key(name)`, returning error if name exists, otherwise calls `insert()`.
     pub fn create_directory(&mut self, parent_segments: &[String], name: &str, ticks: u64) -> Result<(), &'static str> {
         if let Some(parent) = self.find_directory_mut(parent_segments) {
-            if parent.children.iter().any(|c| c.name() == name) {
+            if parent.children.contains_key(name) {
                 return Err("Name already exists in this folder");
             }
-            parent.children.push(Node::Directory(DirectoryNode::new(name, ticks)));
+            parent.children.insert(String::from(name), Node::Directory(DirectoryNode::new(name, ticks)));
             Ok(())
         } else {
             Err("Parent directory not found")
         }
     }
 
-    /// Creates a file.
+    /// Creates a file node using B-Tree insertion.
+    ///
+    /// - **WHAT**: Inserts a new `FileNode` into parent's `children` BTreeMap.
+    /// - **WHY**: Adds file entry to directory index.
+    /// - **WHEN**: Triggered by shell `create` command.
     pub fn create_file(&mut self, parent_segments: &[String], name: &str, ticks: u64) -> Result<(), &'static str> {
         if let Some(parent) = self.find_directory_mut(parent_segments) {
-            if parent.children.iter().any(|c| c.name() == name) {
+            if parent.children.contains_key(name) {
                 return Err("Name already exists in this folder");
             }
-            parent.children.push(Node::File(FileNode {
+            parent.children.insert(String::from(name), Node::File(FileNode {
                 name: String::from(name),
                 content: String::new(),
                 created_at: ticks,
@@ -193,10 +243,13 @@ impl FileSystem {
         }
     }
 
-    /// Writes text to a file.
+    /// Overwrites string content of a file in the B-Tree index.
+    ///
+    /// - **WHAT**: Updates `content` field of matching `FileNode`.
+    /// - **WHEN**: Triggered by shell `write` command or `:wq` editor save.
     pub fn write_file(&mut self, parent_segments: &[String], name: &str, content: &str) -> Result<(), &'static str> {
         if let Some(parent) = self.find_directory_mut(parent_segments) {
-            if let Some(Node::File(file)) = parent.children.iter_mut().find(|c| c.name() == name) {
+            if let Some(Node::File(file)) = parent.children.get_mut(name) {
                 file.content = String::from(content);
                 Ok(())
             } else {
@@ -207,10 +260,13 @@ impl FileSystem {
         }
     }
 
-    /// Reads contents of a file.
+    /// Reads string content of a file from the B-Tree index.
+    ///
+    /// - **WHAT**: Returns copy of `content` field from matching `FileNode`.
+    /// - **WHEN**: Triggered by shell `read` command or entering `edit` mode.
     pub fn read_file(&self, parent_segments: &[String], name: &str) -> Result<String, &'static str> {
         if let Some(parent) = self.find_directory(parent_segments) {
-            if let Some(Node::File(file)) = parent.children.iter().find(|c| c.name() == name) {
+            if let Some(Node::File(file)) = parent.children.get(name) {
                 Ok(file.content.clone())
             } else {
                 Err("File not found or is a directory")
@@ -220,11 +276,13 @@ impl FileSystem {
         }
     }
 
-    /// Deletes a file or directory node.
+    /// Removes a file or directory node from the B-Tree index.
+    ///
+    /// - **WHAT**: Deletes entry from parent's `children` BTreeMap via `remove()`.
+    /// - **WHEN**: Triggered by shell `delete` command.
     pub fn delete_node(&mut self, parent_segments: &[String], name: &str) -> Result<(), &'static str> {
         if let Some(parent) = self.find_directory_mut(parent_segments) {
-            if let Some(index) = parent.children.iter().position(|c| c.name() == name) {
-                parent.children.remove(index);
+            if parent.children.remove(name).is_some() {
                 Ok(())
             } else {
                 Err("Target not found")
@@ -235,7 +293,7 @@ impl FileSystem {
     }
 }
 
-// Thread-safe wrapper using spinlock Mutex.
+/// Global thread-safe spinlock wrapper.
 pub struct Locked<T> {
     inner: spin::Mutex<T>,
 }
@@ -304,5 +362,5 @@ mod spin {
     }
 }
 
-// Global reference instance of our In-Memory Hierarchical File System.
+/// Global synchronized static instance of the AliluOS B-Tree Filesystem.
 pub static FS: Locked<FileSystem> = Locked::new(FileSystem::new());

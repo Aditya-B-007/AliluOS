@@ -1,10 +1,23 @@
+//! # AliluOS Text-Mode Applications & Games (`game.rs`)
+//!
+//! - **WHAT**: Built-in full-screen applications: Drawing Canvas, Atari Breakout, and Two-Player Chess.
+//! - **WHY**: Demonstrates low-level graphics rendering over VGA text mode MMIO, scancode polling, and game logic loops.
+//! - **WHEN**: Triggered by shell commands `draw` or `play [atari / chess]`.
+//! - **HOW**: Directs character output to `WRITER.lock()`, reads keyboard inputs, and implements game state update loops.
+
 use core::arch::asm;
-use alloc::vec::Vec;
 use crate::vga::{Color, WRITER};
 
-/// Polls the keyboard I/O port for a scancode without blocking.
-/// Returns Some(scancode) if a key is available, or None.
+/// Polls hardware PS/2 status and reads scancode if available.
+///
+/// - **WHAT**: Non-blocking helper polling port 0x64 bit 0 and reading port 0x60.
+/// - **WHY**: Allows real-time games (like Breakout) to poll input without hanging the game loop.
+/// - **WHEN**: Called continuously inside game execution loops.
+/// - **HOW**: Executes inline assembly `in al, 0x64` and `in al, 0x60`.
 fn poll_scancode() -> Option<u8> {
+    if let Some(code) = crate::interrupts::pop_scancode() {
+        return Some(code);
+    }
     unsafe {
         let status: u8;
         asm!(
@@ -29,6 +42,9 @@ fn poll_scancode() -> Option<u8> {
 }
 
 /// Blocks until a scancode is received.
+///
+/// - **WHAT**: Busy-wait loop calling `poll_scancode()`.
+/// - **WHY**: Used for modal prompt confirmations ("Press any key to start").
 fn read_scancode_blocking() -> u8 {
     loop {
         if let Some(code) = poll_scancode() {
@@ -37,7 +53,7 @@ fn read_scancode_blocking() -> u8 {
     }
 }
 
-/// Translates a scancode to a char for algebraic chess input.
+/// Translates raw scancodes into ASCII characters for chess algebraic notation.
 fn scancode_to_char(code: u8, shift: bool) -> Option<char> {
     match code {
         0x1E => Some(if shift { 'A' } else { 'a' }),
@@ -66,8 +82,12 @@ fn scancode_to_char(code: u8, shift: bool) -> Option<char> {
 // 1. DRAWING CANVAS TOOL
 // ----------------------------------------------------
 
-/// Launches the full-screen Drawing Canvas.
-/// Background is pure black, drawings are white.
+/// Full-Screen Text Drawing Canvas Application.
+///
+/// - **WHAT**: Interactive 80x25 drawing board using arrow keys and spacebar.
+/// - **WHY**: Provides visual drawing capability using ASCII characters.
+/// - **WHEN**: Triggered by shell command `draw`.
+/// - **HOW**: Maintains an 80x25 `grid` byte array, updates cursor position on arrow keys, draws `*` on space, and renders via `put_char_at()`.
 pub fn start_canvas() {
     let mut vga = WRITER.lock();
     vga.clear();
@@ -83,17 +103,13 @@ pub fn start_canvas() {
 
     let mut cursor_x = 40;
     let mut cursor_y = 12;
-    
-    // Grid memory to persist drawing (80x25 grid)
     let mut grid = [b' '; 80 * 25];
 
     loop {
-        // Redraw persistent canvas grid
         {
             let vga = WRITER.lock();
             for y in 0..25 {
                 for x in 0..80 {
-                    // If cursor is on this position, show a blinking/highlighted character
                     if x == cursor_x && y == cursor_y {
                         vga.put_char_at(y, x, '+');
                     } else {
@@ -106,24 +122,12 @@ pub fn start_canvas() {
         let scancode = read_scancode_blocking();
         match scancode {
             0x01 => break, // Escape: Exit
-            0x48 => { // Up Arrow
-                if cursor_y > 0 { cursor_y -= 1; }
-            }
-            0x50 => { // Down Arrow
-                if cursor_y < 24 { cursor_y += 1; }
-            }
-            0x4B => { // Left Arrow
-                if cursor_x > 0 { cursor_x -= 1; }
-            }
-            0x4D => { // Right Arrow
-                if cursor_x < 79 { cursor_x += 1; }
-            }
-            0x39 => { // Space: Draw white block/dot
-                grid[cursor_y * 80 + cursor_x] = b'*';
-            }
-            0x0E | 0x12 => { // Backspace or 'E': Erase
-                grid[cursor_y * 80 + cursor_x] = b' ';
-            }
+            0x48 => { if cursor_y > 0 { cursor_y -= 1; } }
+            0x50 => { if cursor_y < 24 { cursor_y += 1; } }
+            0x4B => { if cursor_x > 0 { cursor_x -= 1; } }
+            0x4D => { if cursor_x < 79 { cursor_x += 1; } }
+            0x39 => { grid[cursor_y * 80 + cursor_x] = b'*'; }
+            0x0E | 0x12 => { grid[cursor_y * 80 + cursor_x] = b' '; }
             _ => {}
         }
     }
@@ -134,7 +138,12 @@ pub fn start_canvas() {
 // 2. ATARI BREAKOUT GAME
 // ----------------------------------------------------
 
-/// Launches the full-screen Atari Breakout game.
+/// Full-Screen Atari Breakout Game.
+///
+/// - **WHAT**: Classic arcade brick-breaker game in VGA text mode.
+/// - **WHY**: Demonstrates game physics, collision detection, and score rendering on bare metal.
+/// - **WHEN**: Triggered by shell command `play atari`.
+/// - **HOW**: Updates paddle `paddle_x` via arrow keys, updates ball position `(ball_x, ball_y)`, tests brick collisions, and delays execution loops.
 pub fn start_atari() {
     {
         let mut vga = WRITER.lock();
@@ -149,7 +158,7 @@ pub fn start_atari() {
     read_scancode_blocking();
     WRITER.lock().clear();
 
-    let mut paddle_x = 35; // Paddle center
+    let mut paddle_x = 35;
     let paddle_width = 10;
     
     let mut ball_x = 40;
@@ -159,8 +168,6 @@ pub fn start_atari() {
 
     let mut score = 0;
     let mut game_over = false;
-
-    // Bricks grid (5 rows x 10 columns)
     let mut bricks = [true; 50];
 
     loop {
@@ -168,7 +175,6 @@ pub fn start_atari() {
             let mut vga = WRITER.lock();
             vga.clear();
 
-            // Draw Bricks
             for r in 0..5 {
                 let color = match r {
                     0 => Color::Red,
@@ -189,17 +195,14 @@ pub fn start_atari() {
                 }
             }
 
-            // Draw Paddle
             vga.set_color(Color::LightBlue, Color::Black);
             for i in 0..paddle_width {
                 vga.put_char_at(23, paddle_x + i, '=');
             }
 
-            // Draw Ball
             vga.set_color(Color::White, Color::Black);
             vga.put_char_at(ball_y, ball_x, 'O');
 
-            // Draw Score
             vga.put_char_at(0, 2, 'S');
             vga.put_char_at(0, 3, 'C');
             vga.put_char_at(0, 4, 'O');
@@ -225,32 +228,22 @@ pub fn start_atari() {
             break;
         }
 
-        // Non-blocking poll for input
         if let Some(code) = poll_scancode() {
             match code {
-                0x01 => break, // Escape: Exit
-                0x4B => { // Left Arrow
-                    if paddle_x > 2 { paddle_x -= 3; }
-                }
-                0x4D => { // Right Arrow
-                    if paddle_x + paddle_width < 78 { paddle_x += 3; }
-                }
+                0x01 => break,
+                0x4B => { if paddle_x > 2 { paddle_x -= 3; } }
+                0x4D => { if paddle_x + paddle_width < 78 { paddle_x += 3; } }
                 _ => {}
             }
         }
 
-        // Update Ball Position
         let next_x = (ball_x as isize + ball_dx) as usize;
         let next_y = (ball_y as isize + ball_dy) as usize;
 
-        // Wall collisions
-        if next_x <= 1 || next_x >= 78 {
-            ball_dx = -ball_dx;
-        }
+        if next_x <= 1 || next_x >= 78 { ball_dx = -ball_dx; }
         if next_y <= 1 {
             ball_dy = -ball_dy;
         } else if next_y >= 23 {
-            // Paddle collision check
             if next_x >= paddle_x && next_x <= paddle_x + paddle_width {
                 ball_dy = -ball_dy;
             } else {
@@ -258,7 +251,6 @@ pub fn start_atari() {
             }
         }
 
-        // Brick collision check
         if next_y >= 2 && next_y < 7 {
             let r = next_y - 2;
             if next_x >= 5 && next_x < 75 {
@@ -279,7 +271,6 @@ pub fn start_atari() {
     WRITER.lock().clear();
 }
 
-// Helper to print positive numbers on VGA
 fn print_num_at(row: usize, col: usize, val: usize) {
     let vga = WRITER.lock();
     let mut temp = val;
@@ -299,7 +290,6 @@ fn print_num_at(row: usize, col: usize, val: usize) {
     }
 }
 
-// Simple busy-wait loop delay helper
 fn delay(n: usize) {
     for _ in 0..n {
         unsafe { asm!("nop", options(nomem, nostack)); }
@@ -311,14 +301,10 @@ fn delay(n: usize) {
 // ----------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
-enum Piece {
-    Pawn, Knight, Bishop, Rook, Queen, King, Empty
-}
+enum Piece { Pawn, Knight, Bishop, Rook, Queen, King, Empty }
 
 #[derive(Clone, Copy, PartialEq)]
-enum ChessColor {
-    White, Black
-}
+enum ChessColor { White, Black }
 
 #[derive(Clone, Copy)]
 struct ChessPiece {
@@ -326,7 +312,11 @@ struct ChessPiece {
     color: ChessColor,
 }
 
-/// Launches the full-screen two-player Chess game.
+/// Full-Screen Two-Player Chess Application.
+///
+/// - **WHAT**: Turn-based chess engine with algebraic notation inputs (`e2e4`, `b1c3`).
+/// - **WHY**: Demonstrates complex 2D array UI state manipulation.
+/// - **WHEN**: Triggered by shell command `play chess`.
 pub fn start_chess() {
     {
         let mut vga = WRITER.lock();
@@ -341,10 +331,7 @@ pub fn start_chess() {
     }
     read_scancode_blocking();
 
-    // Default Chess Board setup
     let mut board = [[ChessPiece { piece: Piece::Empty, color: ChessColor::White }; 8]; 8];
-
-    // Setup base pieces
     let back_row = [Piece::Rook, Piece::Knight, Piece::Bishop, Piece::Queen, Piece::King, Piece::Bishop, Piece::Knight, Piece::Rook];
     for col in 0..8 {
         board[0][col] = ChessPiece { piece: back_row[col], color: ChessColor::Black };
@@ -362,58 +349,42 @@ pub fn start_chess() {
 
         {
             let mut vga = WRITER.lock();
-            // Instructions and turn information
             vga.set_color(Color::LightCyan, Color::Black);
-            vga.put_char_at(3, 45, 'T');
-            vga.put_char_at(3, 46, 'U');
-            vga.put_char_at(3, 47, 'R');
-            vga.put_char_at(3, 48, 'N');
+            vga.put_char_at(3, 45, 'T'); vga.put_char_at(3, 46, 'U');
+            vga.put_char_at(3, 47, 'R'); vga.put_char_at(3, 48, 'N');
             vga.put_char_at(3, 49, ':');
             if turn == ChessColor::White {
                 vga.set_color(Color::White, Color::Black);
-                vga.put_char_at(3, 51, 'W');
-                vga.put_char_at(3, 52, 'h');
-                vga.put_char_at(3, 53, 'i');
-                vga.put_char_at(3, 54, 't');
+                vga.put_char_at(3, 51, 'W'); vga.put_char_at(3, 52, 'h');
+                vga.put_char_at(3, 53, 'i'); vga.put_char_at(3, 54, 't');
                 vga.put_char_at(3, 55, 'e');
             } else {
                 vga.set_color(Color::LightGray, Color::Black);
-                vga.put_char_at(3, 51, 'B');
-                vga.put_char_at(3, 52, 'l');
-                vga.put_char_at(3, 53, 'a');
-                vga.put_char_at(3, 54, 'c');
+                vga.put_char_at(3, 51, 'B'); vga.put_char_at(3, 52, 'l');
+                vga.put_char_at(3, 53, 'a'); vga.put_char_at(3, 54, 'c');
                 vga.put_char_at(3, 55, 'k');
             }
 
             vga.set_color(Color::White, Color::Black);
-            vga.put_char_at(20, 2, 'Y');
-            vga.put_char_at(20, 3, 'o');
-            vga.put_char_at(20, 4, 'u');
-            vga.put_char_at(20, 5, 'r');
-            vga.put_char_at(20, 6, ' ');
-            vga.put_char_at(20, 7, 'M');
-            vga.put_char_at(20, 8, 'o');
-            vga.put_char_at(20, 9, 'v');
-            vga.put_char_at(20, 10, 'e');
-            vga.put_char_at(20, 11, ':');
+            vga.put_char_at(20, 2, 'Y'); vga.put_char_at(20, 3, 'o');
+            vga.put_char_at(20, 4, 'u'); vga.put_char_at(20, 5, 'r');
+            vga.put_char_at(20, 6, ' '); vga.put_char_at(20, 7, 'M');
+            vga.put_char_at(20, 8, 'o'); vga.put_char_at(20, 9, 'v');
+            vga.put_char_at(20, 10, 'e'); vga.put_char_at(20, 11, ':');
             vga.put_char_at(20, 13, ' ');
 
-            // Draw current input string on screen
             for (i, c) in input_buffer.chars().enumerate() {
                 vga.put_char_at(20, 14 + i, c);
             }
         }
 
-        // Wait for key
         let scancode = read_scancode_blocking();
         match scancode {
-            0x01 => break, // Escape: Exit
-            0x1C => { // Enter: Commit input
-                if input_buffer == "exit" {
-                    break;
-                }
+            0x01 => break,
+            0x1C => {
+                if input_buffer == "exit" { break; }
                 if input_buffer.len() == 4 {
-                    let chars: Vec<char> = input_buffer.chars().collect();
+                    let chars: alloc::vec::Vec<char> = input_buffer.chars().collect();
                     let start_col = (chars[0] as u8 - b'a') as usize;
                     let start_row = (b'8' - chars[1] as u8) as usize;
                     let end_col = (chars[2] as u8 - b'a') as usize;
@@ -422,19 +393,15 @@ pub fn start_chess() {
                     if start_col < 8 && start_row < 8 && end_col < 8 && end_row < 8 {
                         let selected = board[start_row][start_col];
                         if selected.piece != Piece::Empty && selected.color == turn {
-                            // Perform simple move (no complex verification for simplicity)
                             board[end_row][end_col] = selected;
                             board[start_row][start_col] = ChessPiece { piece: Piece::Empty, color: ChessColor::White };
-                            // Switch turn
                             turn = if turn == ChessColor::White { ChessColor::Black } else { ChessColor::White };
                         }
                     }
                 }
                 input_buffer.clear();
             }
-            0x0E => { // Backspace
-                input_buffer.pop();
-            }
+            0x0E => { input_buffer.pop(); }
             _ => {
                 if let Some(c) = scancode_to_char(scancode, false) {
                     if input_buffer.len() < 10 {
@@ -447,37 +414,25 @@ pub fn start_chess() {
     WRITER.lock().clear();
 }
 
-/// Renders the chess board onto the screen.
-
 fn draw_board(board: &[[ChessPiece; 8]; 8]) {
     let mut vga = WRITER.lock();
     vga.set_color(Color::White, Color::Black);
     
-    // Draw columns letters
-    vga.put_char_at(1, 8, 'A');
-    vga.put_char_at(1, 13, 'B');
-    vga.put_char_at(1, 18, 'C');
-    vga.put_char_at(1, 23, 'D');
-    vga.put_char_at(1, 28, 'E');
-    vga.put_char_at(1, 33, 'F');
-    vga.put_char_at(1, 38, 'G');
-    vga.put_char_at(1, 43, 'H');
+    vga.put_char_at(1, 8, 'A'); vga.put_char_at(1, 13, 'B');
+    vga.put_char_at(1, 18, 'C'); vga.put_char_at(1, 23, 'D');
+    vga.put_char_at(1, 28, 'E'); vga.put_char_at(1, 33, 'F');
+    vga.put_char_at(1, 38, 'G'); vga.put_char_at(1, 43, 'H');
 
-    // Draw board content rows
     for r in 0..8 {
         vga.set_color(Color::White, Color::Black);
-        // Draw row rank number
         vga.put_char_at(3 + r * 2, 2, (b'8' - r as u8) as char);
 
         for c in 0..8 {
-            // Draw alternating squares visually using colors
             let bg = if (r + c) % 2 == 0 { Color::DarkGray } else { Color::Black };
-            
             let p = board[r][c];
             let fg = if p.color == ChessColor::White { Color::White } else { Color::LightRed };
             vga.set_color(fg, bg);
 
-            // Piece characters
             let (c1, c2) = match p.piece {
                 Piece::Pawn => ('P', ' '),
                 Piece::Knight => ('N', ' '),
