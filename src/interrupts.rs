@@ -11,7 +11,7 @@ use crate::vga::{Color, VGA, WRITER};
 /// Reading port 0x60 immediately in the interrupt handler prevents the hardware PS/2 controller from stalling
 /// or dropping keystrokes during fast typing or long input lines.
 pub struct ScancodeBuffer {
-    buffer: [u8; 128],
+    buffer: [u8; 256],
     head: usize,
     tail: usize,
 }
@@ -19,7 +19,7 @@ pub struct ScancodeBuffer {
 impl ScancodeBuffer {
     pub const fn new() -> Self {
         Self {
-            buffer: [0; 128],
+            buffer: [0; 256],
             head: 0,
             tail: 0,
         }
@@ -27,7 +27,7 @@ impl ScancodeBuffer {
 
     /// Pushes a scancode byte into the ring buffer (called inside IRQ1 interrupt handler).
     pub fn push(&mut self, scancode: u8) {
-        let next_head = (self.head + 1) % 128;
+        let next_head = (self.head + 1) % 256;
         if next_head != self.tail {
             self.buffer[self.head] = scancode;
             self.head = next_head;
@@ -40,7 +40,7 @@ impl ScancodeBuffer {
             None
         } else {
             let scancode = self.buffer[self.tail];
-            self.tail = (self.tail + 1) % 128;
+            self.tail = (self.tail + 1) % 256;
             Some(scancode)
         }
     }

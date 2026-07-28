@@ -163,6 +163,16 @@ impl FileSystem {
         segments
     }
 
+    /// Splits resolved path segments into (parent_segments, target_name).
+    pub fn split_parent_and_name<'a>(&self, resolved: &'a [String]) -> (&'a [String], &'a str) {
+        if resolved.is_empty() {
+            (&[], "")
+        } else {
+            let (parent, name) = resolved.split_at(resolved.len() - 1);
+            (parent, &name[0])
+        }
+    }
+
     /// Finds immutable reference to target `DirectoryNode` by path segments.
     pub fn find_directory(&self, segments: &[String]) -> Option<&DirectoryNode> {
         if segments.is_empty() {

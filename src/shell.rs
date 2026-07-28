@@ -173,12 +173,12 @@ impl Shell {
                         let target_path = self.editor_filename.clone();
                         let mut fs = FS.lock();
                         let resolved = fs.resolve_path(&self.cwd, &target_path);
-                        if resolved.is_empty() {
-                            vga.println("Error: Cannot write to root");
+                        let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                        if target_name.is_empty() {
+                            vga.println("Error: Invalid filename");
                         } else {
-                            let (parent_segments, file_name) = resolved.split_at(resolved.len() - 1);
                             let content = self.editor_buffer.clone();
-                            match fs.write_file(parent_segments, &file_name[0], &content) {
+                            match fs.write_file(parent_segments, target_name, &content) {
                                 Ok(_) => {
                                     vga.set_color(Color::LightGreen, Color::Black);
                                     vga.println("\nFile saved successfully.");
@@ -242,18 +242,15 @@ impl Shell {
         let command = parts.next().unwrap_or("");
         let args: Vec<&str> = parts.collect();
 
-        // Launch full-screen Interactive Help Viewer on `help` or `--help`
+        // Display inline Shell Command Manual on `help` or `--help`
         if command == "help" || args.contains(&"--help") || args.contains(&"-h") {
-            self.mode = ShellMode::HelpViewer;
             let mut vga = WRITER.lock();
-            vga.clear();
             vga.set_color(Color::LightCyan, Color::Black);
             vga.println("========================================================================");
-            vga.println("                    AliluOS INTERACTIVE HELP VIEWER                     ");
+            vga.println("                    AliluOS COMMAND MANUAL                              ");
             vga.println("========================================================================");
             vga.set_color(Color::White, Color::Black);
-            vga.println("");
-            vga.println("  help                       - Launch this interactive help viewer");
+            vga.println("  help                       - Display this command manual");
             vga.println("  clear                      - Clear display screen");
             vga.println("  system                     - Display system specs, memory & timer stats");
             vga.println("  tasks                      - List active kernel CPU tasks");
@@ -269,11 +266,6 @@ impl Shell {
             vga.println("  play [atari / chess]       - Launch built-in text game");
             vga.println("  draw                       - Launch drawing canvas tool");
             vga.println("  echo [text]                - Print text back to screen");
-            vga.println("");
-            vga.set_color(Color::Yellow, Color::Black);
-            vga.println("------------------------------------------------------------------------");
-            vga.println("  Press [Escape] to close Help Viewer and return to Command Line Prompt");
-            vga.println("------------------------------------------------------------------------");
             vga.set_color(Color::White, Color::Black);
             return;
         }
@@ -334,13 +326,13 @@ impl Shell {
                 let path_str = args[0];
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                if resolved.is_empty() {
+                let (parent_segments, dir_name) = fs.split_parent_and_name(&resolved);
+                if dir_name.is_empty() {
                     vga.println("Error: Invalid directory name");
                     return;
                 }
-                let (parent_segments, dir_name) = resolved.split_at(resolved.len() - 1);
                 let ticks = unsafe { crate::interrupts::timer_ticks() };
-                match fs.create_directory(parent_segments, &dir_name[0], ticks) {
+                match fs.create_directory(parent_segments, dir_name, ticks) {
                     Ok(_) => vga.println("Directory folder created successfully in B-Tree index."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
@@ -389,12 +381,11 @@ impl Shell {
                 let path_str = args[0];
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                if resolved.is_empty() {
+                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                if target_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                let (parent_segments, file_name) = resolved.split_at(resolved.len() - 1);
-                let target_name = &file_name[0];
 
                 let ticks = unsafe { crate::interrupts::timer_ticks() };
                 match fs.create_file(parent_segments, target_name, ticks) {
@@ -415,12 +406,12 @@ impl Shell {
                 let text = args[1..].join(" ");
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                if resolved.is_empty() {
+                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                if target_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                let (parent_segments, file_name) = resolved.split_at(resolved.len() - 1);
-                match fs.write_file(parent_segments, &file_name[0], &text) {
+                match fs.write_file(parent_segments, target_name, &text) {
                     Ok(_) => vga.println("Text written to file in B-Tree index."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
@@ -437,12 +428,12 @@ impl Shell {
                 let path_str = args[0];
                 let fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                if resolved.is_empty() {
+                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                if target_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                let (parent_segments, file_name) = resolved.split_at(resolved.len() - 1);
-                match fs.read_file(parent_segments, &file_name[0]) {
+                match fs.read_file(parent_segments, target_name) {
                     Ok(content) => {
                         vga.println("--- Content ---");
                         vga.println(&content);
@@ -463,12 +454,12 @@ impl Shell {
                 let path_str = args[0];
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                if resolved.is_empty() {
+                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                if target_name.is_empty() {
                     vga.println("Error: Invalid target");
                     return;
                 }
-                let (parent_segments, target_name) = resolved.split_at(resolved.len() - 1);
-                match fs.delete_node(parent_segments, &target_name[0]) {
+                match fs.delete_node(parent_segments, target_name) {
                     Ok(_) => vga.println("Target deleted successfully from B-Tree index."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
@@ -486,12 +477,11 @@ impl Shell {
                 
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                if resolved.is_empty() {
+                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                if target_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                let (parent_segments, file_name) = resolved.split_at(resolved.len() - 1);
-                let target_name = &file_name[0];
                 
                 // Automatically create file in B-Tree index if it doesn't exist
                 let dir_items = fs.list_directory(parent_segments).unwrap_or_else(|_| Vec::new());
