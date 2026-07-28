@@ -1,0 +1,20 @@
+# Generated build artifacts
+/target/
+
+# Virtual Machine & Disk Images
+*.bin
+*.vdi
+*.img
+*.iso
+*.vmdk
+
+# Cargo lock & local state
+Cargo.lock
+
+# IDE & OS generated files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
