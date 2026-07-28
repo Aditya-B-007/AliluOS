@@ -52,8 +52,12 @@ impl Kernel {
         // 4. Initialize global heap memory allocator (100 KiB heap)
         crate::allocator::init_heap();
 
-        // 5. Render AliluOS welcome header and command prompt
+        // 5. Initialize PCI Network Interface Card driver
+        crate::network::NIC_DRIVER.lock().init();
+
+        // 6. Render AliluOS welcome header and command prompt
         self.boot_banner();
+
     }
 
     /// Main Kernel Execution Loop.

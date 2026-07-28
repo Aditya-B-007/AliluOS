@@ -23,6 +23,8 @@ mod allocator;  // Heap memory allocator and memory map manager
 mod fs;         // B-Tree indexed hierarchical filesystem
 mod shell;      // Interactive Command Line Interface and Help Viewer
 mod game;       // Built-in text games and drawing canvas application
+mod network;    // Integrated Networking, smoltcp TCP/IP, HTTP service, Git client & Text Browser
+
 
 use core::panic::PanicInfo;
 use kernel::Kernel;

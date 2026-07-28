@@ -264,11 +264,14 @@ impl Shell {
             vga.println("  delete [file/folder]       - Delete a file or folder from B-Tree index");
             vga.println("  edit [file]                - Open interactive text editor");
             vga.println("  play [atari / chess]       - Launch built-in text game");
-            vga.println("  draw                       - Launch drawing canvas tool");
+            vga.println("  browse [url]               - Open text web browser (Emacs l/r keys)");
+            vga.println("  git clone [url]            - Clone git repository into B-Tree index");
+            vga.println("  git download               - Download git software tool");
             vga.println("  echo [text]                - Print text back to screen");
             vga.set_color(Color::White, Color::Black);
             return;
         }
+
 
         let mut vga = WRITER.lock();
 
@@ -523,6 +526,31 @@ impl Shell {
                 drop(vga);
                 crate::game::start_canvas();
             }
+            "browse" | "web" => {
+                if args.is_empty() {
+                    vga.println("Usage: browse [url]");
+                    return;
+                }
+                let url = args[0];
+                drop(vga);
+                let mut browser = crate::network::WebBrowser::new();
+                browser.navigate(url);
+                browser.render();
+            }
+            "git" => {
+                if args.is_empty() {
+                    vga.println("Usage: git clone [repo_url] | git download");
+                    return;
+                }
+                drop(vga);
+                if args[0] == "download" {
+                    let _ = crate::network::download_git_software();
+                } else if args[0] == "clone" && args.len() > 1 {
+                    let _ = crate::network::git_clone(args[1]);
+                } else {
+                    WRITER.lock().println("Usage: git clone [repo_url] | git download");
+                }
+            }
             "echo" => {
                 let text = args.join(" ");
                 vga.println(&text);
@@ -532,11 +560,12 @@ impl Shell {
                 vga.write("Command not recognized: ");
                 vga.println(command);
                 vga.set_color(Color::White, Color::Black);
-                vga.println("Type 'help' to launch the Interactive Help Viewer.");
+                vga.println("Type 'help' to view all commands.");
             }
         }
     }
 }
+
 
 /// Formats seconds integer into a string.
 fn seconds_to_str(secs: u64) -> String {
