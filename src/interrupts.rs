@@ -309,7 +309,7 @@ unsafe fn outb(port: u16, value: u8) {
 /// Helper macro to generate naked/assembly wrapper entry points for simple exceptions.
 /// Naked functions do not generate prologues/epilogues, allowing precise assembly control.
 macro_rules! exception_handler {
-    ($name:ident, $msg:expr) => {
+    ($name:ident, $inner_name:ident, $msg:expr) => {
         #[unsafe(naked)]
         unsafe extern "C" fn $name() {
             core::arch::naked_asm!(
@@ -336,11 +336,11 @@ macro_rules! exception_handler {
                 "pop rcx",
                 "pop rax",
                 "iretq", // Interrupt return (64-bit)
-                rust_handler = sym $name_inner,
+                rust_handler = sym $inner_name,
             );
         }
 
-        extern "C" fn $name_inner() {
+        extern "C" fn $inner_name() {
             let mut vga = VGA::new();
             vga.set_color(Color::LightRed, Color::Black);
             vga.println("\n--- CPU EXCEPTION ---");
@@ -352,8 +352,8 @@ macro_rules! exception_handler {
 }
 
 // Generate simple CPU exception handlers
-exception_handler!(divide_by_zero_handler, "Divide by Zero Exception (0x00)");
-exception_handler!(double_fault_handler, "Double Fault Exception (0x08)");
+exception_handler!(divide_by_zero_handler, divide_by_zero_handler_inner, "Divide by Zero Exception (0x00)");
+exception_handler!(double_fault_handler, double_fault_handler_inner, "Double Fault Exception (0x08)");
 
 /// Naked assembly handler for Page Fault exception.
 /// Page Faults push a custom error code onto the stack, and store the faulting virtual address in `cr2`.

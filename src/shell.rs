@@ -208,7 +208,7 @@ impl Shell {
                 let ticks = unsafe { crate::interrupts::timer_ticks() };
                 let seconds = ticks / 100;
                 vga.write("seconds: ");
-                vga.println(seconds_to_str(seconds));
+                vga.println(&seconds_to_str(seconds));
             }
             "tasks" => {
                 vga.set_color(Color::LightGreen, Color::Black);

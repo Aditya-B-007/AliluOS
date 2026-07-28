@@ -1,4 +1,5 @@
 use core::arch::asm;
+use alloc::vec::Vec;
 use crate::vga::{Color, VGA};
 
 /// Polls the keyboard I/O port for a scancode without blocking.
@@ -376,7 +377,7 @@ pub fn start_chess() {
 
     loop {
         vga.clear();
-        draw_board(&board, &vga);
+        draw_board(&board, &mut vga);
 
         // Instructions and turn information
         vga.set_color(Color::LightCyan, Color::Black);
@@ -463,7 +464,7 @@ pub fn start_chess() {
 }
 
 /// Renders the chess board onto the screen.
-fn draw_board(board: &[[ChessPiece; 8]; 8], vga: &VGA) {
+fn draw_board(board: &[[ChessPiece; 8]; 8], vga: &mut VGA) {
     vga.set_color(Color::White, Color::Black);
     
     // Draw columns letters

@@ -140,7 +140,7 @@ impl FallbackAllocator {
         let mut current = &mut self.head;
 
         while let Some(next_node) = unsafe { current.next.as_mut() } {
-            if let Ok(alloc_start) = self.alloc_from_region(next_node, size, align) {
+            if let Ok(alloc_start) = FallbackAllocator::alloc_from_region(next_node, size, align) {
                 let next_next = next_node.next;
                 current.next = next_next;
                 return Some((next_node, alloc_start));
@@ -151,7 +151,7 @@ impl FallbackAllocator {
     }
 
     /// Tries to allocate from a specific free region, returning the aligned start address.
-    fn alloc_from_region(&self, region: &ListNode, size: usize, align: usize) -> Result<usize, ()> {
+    fn alloc_from_region(region: &ListNode, size: usize, align: usize) -> Result<usize, ()> {
         let alloc_start = align_up(region.start_address(), align);
         let alloc_end = alloc_start.checked_add(size).ok_or(())?;
 
@@ -179,6 +179,8 @@ pub struct FixedSizeBlockAllocator {
     list_heads: [*mut ListNode; BLOCK_SIZES.len()],
     fallback: FallbackAllocator,
 }
+
+unsafe impl Send for FixedSizeBlockAllocator {}
 
 impl FixedSizeBlockAllocator {
     pub const fn new() -> Self {
