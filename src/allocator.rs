@@ -8,11 +8,8 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr;
 
-/// The total size of the kernel heap memory pool in bytes (100 KiB).
-///
-/// - WHAT: Defines total bytes reserved for dynamic kernel data structures.
-/// - WHY: Ensures sufficient memory for file system nodes, shell buffers, and games while keeping kernel lightweight.
-pub const HEAP_SIZE: usize = 100 * 1024;
+/// The total size of the kernel heap memory pool in bytes (5 MiB).
+pub const HEAP_SIZE: usize = 5 * 1024 * 1024;
 
 /// Static memory buffer representing raw physical heap space.
 ///
@@ -154,11 +151,35 @@ impl FallbackAllocator {
             return;
         }
 
-        let mut node = ListNode::new(adjusted_size);
-        node.next = self.head.next;
         let node_ptr = aligned_addr as *mut ListNode;
-        node_ptr.write(node);
-        self.head.next = node_ptr;
+        node_ptr.write(ListNode::new(adjusted_size));
+
+        // Insert in address-sorted order into linked list
+        let mut current = &mut self.head;
+        while let Some(next_node) = unsafe { current.next.as_mut() } {
+            if next_node.start_address() > aligned_addr {
+                break;
+            }
+            current = unsafe { &mut *current.next };
+        }
+
+        unsafe {
+            (*node_ptr).next = current.next;
+            current.next = node_ptr;
+        }
+
+        // Coalesce adjacent free blocks in the list
+        let mut iter = &mut self.head;
+        while let Some(curr_node) = unsafe { iter.next.as_mut() } {
+            if let Some(next_node) = unsafe { curr_node.next.as_mut() } {
+                if curr_node.end_address() == next_node.start_address() {
+                    curr_node.size += next_node.size;
+                    curr_node.next = next_node.next;
+                    continue;
+                }
+            }
+            iter = unsafe { &mut *iter.next };
+        }
     }
 
     fn find_region(&mut self, size: usize, align: usize) -> Option<(*mut ListNode, usize)> {
@@ -193,8 +214,9 @@ impl FallbackAllocator {
     }
 }
 
-/// Fixed-size block allocation classes (8, 16, 32, 64, 128, 256, 512, 1024, 2048 bytes).
-const BLOCK_SIZES: &[usize] = &[8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+/// Fixed-size block allocation classes (16, 32, 64, 128, 256, 512, 1024, 2048 bytes).
+/// Minimum size class MUST be >= size_of::<ListNode>() (16 bytes) to prevent memory corruption during deallocation.
+const BLOCK_SIZES: &[usize] = &[16, 32, 64, 128, 256, 512, 1024, 2048];
 
 /// Fixed-Size Block Allocator implementation.
 ///

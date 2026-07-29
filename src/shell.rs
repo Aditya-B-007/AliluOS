@@ -31,6 +31,7 @@ pub struct Shell {
     mode: ShellMode,            // Active mode (Command vs. Editor vs. HelpViewer)
     editor_filename: String,    // Name of file currently being edited
     editor_buffer: String,      // Buffer storing accumulating text in editor mode
+    save_pending: bool,         // Flag tracking Ctrl+S save readiness
     cwd: Vec<String>,           // Current Working Directory path segments
 }
 
@@ -42,6 +43,7 @@ impl Shell {
             mode: ShellMode::Command,
             editor_filename: String::new(),
             editor_buffer: String::new(),
+            save_pending: false,
             cwd: Vec::new(),
         }
     }
@@ -73,7 +75,63 @@ impl Shell {
                     vga.write("> ");
                 }
             }
-            ShellMode::Editor => {}
+            ShellMode::Editor => {
+                self.mode = ShellMode::Command;
+                self.save_pending = false;
+                self.editor_buffer.clear();
+                self.editor_filename.clear();
+                let mut vga = WRITER.lock();
+                vga.set_color(Color::Yellow, Color::Black);
+                vga.println("\nExited editor without saving.");
+                vga.set_color(Color::White, Color::Black);
+                vga.write("> ");
+            }
+        }
+    }
+
+    /// Handles Ctrl+Key shortcuts (e.g. Ctrl+S then Ctrl+K for editor save).
+    pub fn handle_ctrl_char(&mut self, c: char) {
+        let lower = c.to_ascii_lowercase();
+        if self.mode == ShellMode::Editor {
+            let mut vga = WRITER.lock();
+            if lower == 's' {
+                self.save_pending = true;
+                vga.set_color(Color::Yellow, Color::Black);
+                vga.println("\n[Ctrl+S detected! Press Ctrl+K to save and exit]");
+                vga.set_color(Color::White, Color::Black);
+            } else if lower == 'k' {
+                if self.save_pending {
+                    let target_path = self.editor_filename.clone();
+                    let mut fs = FS.lock();
+                    let resolved = fs.resolve_path(&self.cwd, &target_path);
+                    let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
+                    if target_name.is_empty() {
+                        vga.println("\nError: Invalid filename");
+                    } else {
+                        let content = self.editor_buffer.clone();
+                        match fs.write_file(parent_segments, target_name, &content) {
+                            Ok(_) => {
+                                vga.set_color(Color::LightGreen, Color::Black);
+                                vga.println("\nFile saved successfully.");
+                            }
+                            Err(e) => {
+                                vga.set_color(Color::LightRed, Color::Black);
+                                vga.println(e);
+                            }
+                        }
+                    }
+                    vga.set_color(Color::White, Color::Black);
+                    self.mode = ShellMode::Command;
+                    self.save_pending = false;
+                    self.editor_buffer.clear();
+                    self.editor_filename.clear();
+                    vga.write("> ");
+                } else {
+                    vga.set_color(Color::Yellow, Color::Black);
+                    vga.println("\n[Press Ctrl+S first, then Ctrl+K to save and exit]");
+                    vga.set_color(Color::White, Color::Black);
+                }
+            }
         }
     }
 
@@ -256,7 +314,8 @@ impl Shell {
             vga.println("  tasks                      - List active kernel CPU tasks");
             vga.println("  list                       - List files/folders (B-Tree sorted)");
             vga.println("  directory                  - Print current working directory path");
-            vga.println("  enter [path]               - Change current working directory");
+            vga.println("  enter [path]               - Enter directory folder");
+            vga.println("  back / leave / up / cd ..  - Return back to parent directory");
             vga.println("  folder [name]              - Create a new directory folder in B-Tree");
             vga.println("  create [file]              - Create a new file in B-Tree index");
             vga.println("  write [file] [text]        - Write text content to a file");
@@ -286,7 +345,7 @@ impl Shell {
                 vga.println("OS Name: AliluOS (ಅಳಿಲು)");
                 vga.println("Architecture: x86_64 Bare-Metal");
                 vga.println("Platform: Standard PC compatible");
-                vga.println("Heap Status: 100 KiB initialized");
+                vga.println("Heap Status: 5 MiB (5120 KiB) initialized");
                 vga.println("Filesystem: B-Tree Indexed Hierarchy");
                 let ticks = crate::interrupts::timer_ticks();
                 let seconds = ticks / 100;
@@ -315,6 +374,31 @@ impl Shell {
                 let resolved = fs.resolve_path(&self.cwd, path);
                 if fs.find_directory(&resolved).is_some() {
                     self.cwd = resolved;
+                    vga.write("Entered directory: ");
+                    self.print_cwd_path(&mut vga);
+                } else {
+                    vga.set_color(Color::LightRed, Color::Black);
+                    vga.println("Error: Directory not found.");
+                    vga.set_color(Color::White, Color::Black);
+                }
+            }
+            "back" | "leave" | "up" => {
+                if !self.cwd.is_empty() {
+                    self.cwd.pop();
+                    vga.write("Returned to: ");
+                    self.print_cwd_path(&mut vga);
+                } else {
+                    vga.println("Already at root directory (/).");
+                }
+            }
+            "cd" => {
+                let path = if args.is_empty() { ".." } else { args[0] };
+                let mut fs = FS.lock();
+                let resolved = fs.resolve_path(&self.cwd, path);
+                if fs.find_directory(&resolved).is_some() {
+                    self.cwd = resolved;
+                    vga.write("Changed directory to: ");
+                    self.print_cwd_path(&mut vga);
                 } else {
                     vga.set_color(Color::LightRed, Color::Black);
                     vga.println("Error: Directory not found.");
@@ -381,18 +465,34 @@ impl Shell {
                     vga.println("Usage: create [filename]");
                     return;
                 }
-                let path_str = args[0];
+                let raw_path = args[0];
+                let final_path = match normalize_and_validate_filename(raw_path) {
+                    Ok(p) => p,
+                    Err(err) => {
+                        vga.set_color(Color::LightRed, Color::Black);
+                        vga.println(err);
+                        vga.set_color(Color::White, Color::Black);
+                        return;
+                    }
+                };
+
                 let mut fs = FS.lock();
-                let resolved = fs.resolve_path(&self.cwd, path_str);
+                let resolved = fs.resolve_path(&self.cwd, &final_path);
                 let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
                 if target_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
 
-                let ticks = unsafe { crate::interrupts::timer_ticks() };
+                let ticks = crate::interrupts::timer_ticks();
                 match fs.create_file(parent_segments, target_name, ticks) {
-                    Ok(_) => vga.println("File created successfully in B-Tree index."),
+                    Ok(_) => {
+                        vga.set_color(Color::LightGreen, Color::Black);
+                        vga.write("File '");
+                        vga.write(target_name);
+                        vga.println("' created successfully in B-Tree index.");
+                        vga.set_color(Color::White, Color::Black);
+                    }
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
                         vga.println(e);
@@ -476,36 +576,45 @@ impl Shell {
                     vga.println("Usage: edit [filename]");
                     return;
                 }
-                let path_str = args[0];
-                
+                let raw_path = args[0];
+                let final_path = match normalize_and_validate_filename(raw_path) {
+                    Ok(p) => p,
+                    Err(err) => {
+                        vga.set_color(Color::LightRed, Color::Black);
+                        vga.println(err);
+                        vga.set_color(Color::White, Color::Black);
+                        return;
+                    }
+                };
+
                 let mut fs = FS.lock();
-                let resolved = fs.resolve_path(&self.cwd, path_str);
+                let resolved = fs.resolve_path(&self.cwd, &final_path);
                 let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
                 if target_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                
-                // Automatically create file in B-Tree index if it doesn't exist
+
                 let dir_items = fs.list_directory(parent_segments).unwrap_or_else(|_| Vec::new());
                 let file_exists = dir_items.iter().any(|(name, is_dir)| name == target_name && !is_dir);
 
                 if !file_exists {
-                    let ticks = unsafe { crate::interrupts::timer_ticks() };
+                    let ticks = crate::interrupts::timer_ticks();
                     let _ = fs.create_file(parent_segments, target_name, ticks);
                 }
 
                 let current_content = fs.read_file(parent_segments, target_name).unwrap_or_else(|_| String::new());
-                self.editor_filename = String::from(path_str);
+                self.editor_filename = final_path.clone();
                 self.editor_buffer = current_content.clone();
                 self.mode = ShellMode::Editor;
+                self.save_pending = false;
 
                 vga.clear();
                 vga.set_color(Color::LightCyan, Color::Black);
                 vga.write("--- Editing File: ");
                 vga.write(target_name);
                 vga.println(" ---");
-                vga.println("Type your text below. Type ':wq' on a new line and press Enter to save and exit, or ':q' to exit without saving.");
+                vga.println("Type your text below. Save & Exit: Ctrl+S + Ctrl+K  | Exit without saving: ESC");
                 vga.println("------------------------------------------------------------------------");
                 vga.set_color(Color::White, Color::Black);
                 vga.write(&current_content);
@@ -578,4 +687,33 @@ fn seconds_to_str(secs: u64) -> String {
         s.push(c);
     }
     s
+}
+
+/// Validates file extensions and defaults to `.txt` if no extension is specified.
+fn normalize_and_validate_filename(path_str: &str) -> Result<String, &'static str> {
+    let filename = if let Some(idx) = path_str.rfind('/') {
+        &path_str[idx + 1..]
+    } else {
+        path_str
+    };
+
+    if !filename.contains('.') {
+        let mut formatted = String::from(path_str);
+        formatted.push_str(".txt");
+        Ok(formatted)
+    } else {
+        let ext = &filename[filename.rfind('.').unwrap() + 1..];
+        let ext_lower = ext.to_lowercase();
+        let allowed = [
+            "txt", "md", "doc",
+            "rs", "c", "h", "cpp", "hpp", "py", "js", "ts", "jsx", "tsx",
+            "html", "htm", "css", "java", "kt", "sh", "bat", "ps1",
+            "json", "toml", "yaml", "yml", "xml", "ini", "asm", "s"
+        ];
+        if allowed.contains(&ext_lower.as_str()) {
+            Ok(String::from(path_str))
+        } else {
+            Err("Error: Unsupported file type. Only text (.txt) and source code files (.rs, .c, .py, .js, .cpp, .html, .css, etc.) are allowed.")
+        }
+    }
 }
