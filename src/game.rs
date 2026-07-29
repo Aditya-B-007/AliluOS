@@ -6,6 +6,7 @@
 //! - **HOW**: Directs character output to `WRITER.lock()`, reads keyboard inputs, and implements game state update loops.
 
 use core::arch::asm;
+use alloc::vec::Vec;
 use crate::vga::{Color, WRITER};
 
 /// Polls hardware PS/2 status and reads scancode if available.

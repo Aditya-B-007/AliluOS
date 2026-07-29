@@ -264,7 +264,7 @@ impl Shell {
             vga.println("  delete [file/folder]       - Delete a file or folder from B-Tree index");
             vga.println("  edit [file]                - Open interactive text editor");
             vga.println("  play [atari / chess]       - Launch built-in text game");
-            vga.println("  browse [url]               - Open text web browser (Emacs l/r keys)");
+            vga.println("  browse [query]             - Open DuckDuckGo search browser (Type & Enter to Search)");
             vga.println("  git clone [url]            - Clone git repository into B-Tree index");
             vga.println("  git download               - Download git software tool");
             vga.println("  echo [text]                - Print text back to screen");
@@ -288,11 +288,11 @@ impl Shell {
                 vga.println("Platform: Standard PC compatible");
                 vga.println("Heap Status: 100 KiB initialized");
                 vga.println("Filesystem: B-Tree Indexed Hierarchy");
-                vga.write("Uptime: ");
-                let ticks = unsafe { crate::interrupts::timer_ticks() };
+                let ticks = crate::interrupts::timer_ticks();
                 let seconds = ticks / 100;
-                vga.write("seconds: ");
-                vga.println(seconds_to_str(seconds));
+                vga.write("Uptime: ");
+                vga.write(&seconds_to_str(seconds));
+                vga.println(" seconds");
             }
             "tasks" => {
                 vga.set_color(Color::LightGreen, Color::Black);
@@ -527,15 +527,9 @@ impl Shell {
                 crate::game::start_canvas();
             }
             "browse" | "web" => {
-                if args.is_empty() {
-                    vga.println("Usage: browse [url]");
-                    return;
-                }
-                let url = args[0];
+                let initial_query = args.join(" ");
                 drop(vga);
-                let mut browser = crate::network::WebBrowser::new();
-                browser.navigate(url);
-                browser.render();
+                crate::network::start_browser(&initial_query);
             }
             "git" => {
                 if args.is_empty() {

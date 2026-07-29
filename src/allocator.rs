@@ -142,12 +142,21 @@ impl FallbackAllocator {
     }
 
     unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
-        assert_eq!(align_up(addr, core::mem::align_of::<ListNode>()), addr);
-        assert!(size >= core::mem::size_of::<ListNode>());
+        let align = core::mem::align_of::<ListNode>();
+        let aligned_addr = align_up(addr, align);
+        let padding = aligned_addr - addr;
 
-        let mut node = ListNode::new(size);
+        if size <= padding {
+            return;
+        }
+        let adjusted_size = size - padding;
+        if adjusted_size < core::mem::size_of::<ListNode>() {
+            return;
+        }
+
+        let mut node = ListNode::new(adjusted_size);
         node.next = self.head.next;
-        let node_ptr = addr as *mut ListNode;
+        let node_ptr = aligned_addr as *mut ListNode;
         node_ptr.write(node);
         self.head.next = node_ptr;
     }
@@ -156,7 +165,7 @@ impl FallbackAllocator {
         let mut current = &mut self.head;
 
         while let Some(next_node) = unsafe { current.next.as_mut() } {
-            if let Ok(alloc_start) = self.alloc_from_region(next_node, size, align) {
+            if let Ok(alloc_start) = FallbackAllocator::alloc_from_region(next_node, size, align) {
                 let next_next = next_node.next;
                 current.next = next_next;
                 return Some((next_node, alloc_start));
@@ -166,9 +175,10 @@ impl FallbackAllocator {
         None
     }
 
-    fn alloc_from_region(&self, region: &ListNode, size: usize, align: usize) -> Result<usize, ()> {
+    fn alloc_from_region(region: &ListNode, size: usize, align: usize) -> Result<usize, ()> {
         let alloc_start = align_up(region.start_address(), align);
-        let alloc_end = alloc_start.checked_add(size).ok_or(())?;
+        let raw_alloc_end = alloc_start.checked_add(size).ok_or(())?;
+        let alloc_end = align_up(raw_alloc_end, core::mem::align_of::<ListNode>());
 
         if alloc_end > region.end_address() {
             return Err(());
@@ -196,6 +206,8 @@ pub struct FixedSizeBlockAllocator {
     fallback: FallbackAllocator,
 }
 
+unsafe impl Send for FixedSizeBlockAllocator {}
+
 impl FixedSizeBlockAllocator {
     pub const fn new() -> Self {
         FixedSizeBlockAllocator {
@@ -212,10 +224,11 @@ impl FixedSizeBlockAllocator {
         if let Some((node, alloc_start)) = self.fallback.find_region(layout.size(), layout.align()) {
             let node_ptr = node as usize;
             let node_size = (*node).size;
-            let alloc_end = alloc_start + layout.size();
-            let excess_size = (node_ptr + node_size) - alloc_end;
+            let raw_alloc_end = alloc_start + layout.size();
+            let alloc_end = align_up(raw_alloc_end, core::mem::align_of::<ListNode>());
+            let excess_size = (node_ptr + node_size).saturating_sub(alloc_end);
 
-            if excess_size > 0 {
+            if excess_size >= core::mem::size_of::<ListNode>() {
                 self.fallback.add_free_region(alloc_end, excess_size);
             }
             alloc_start as *mut u8

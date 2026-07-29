@@ -38,10 +38,15 @@ use kernel::Kernel;
 /// - **HOW**: Accepts `PanicInfo` containing file/line metadata. Halts execution safely by entering an infinite loop.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    // Suppress unused variable warning while preserving metadata for potential debug logs
-    let _ = info;
-
-    // Halt CPU execution safely in a tight loop to prevent execution of corrupted state
+    let mut vga = crate::vga::WRITER.lock();
+    vga.set_color(crate::vga::Color::LightRed, crate::vga::Color::Black);
+    vga.println("\n--- KERNEL PANIC ---");
+    if let Some(location) = info.location() {
+        vga.write("Location: ");
+        vga.write(location.file());
+        vga.println("");
+    }
+    vga.set_color(crate::vga::Color::White, crate::vga::Color::Black);
     loop {}
 }
 
