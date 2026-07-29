@@ -70,6 +70,7 @@ pub struct Keyboard {
     alt: bool,
 
     caps_lock: bool,
+    caps_lock_pressed: bool,
     num_lock: bool,
     scroll_lock: bool,
 }
@@ -82,6 +83,7 @@ impl Keyboard {
             ctrl: false,
             alt: false,
             caps_lock: false,
+            caps_lock_pressed: false,
             num_lock: false,
             scroll_lock: false,
         }
@@ -101,6 +103,7 @@ impl Keyboard {
         self.ctrl = false;
         self.alt = false;
         self.caps_lock = false;
+        self.caps_lock_pressed = false;
         self.num_lock = false;
         self.scroll_lock = false;
     }
@@ -113,14 +116,8 @@ impl Keyboard {
 
     /// Polls for the next available keyboard event.
     ///
-    /// WHAT IT DOES:
-    /// 1. First attempts to pop a scancode from the IRQ1 interrupt ring buffer (`pop_scancode()`).
-    /// 2. If ring buffer is empty, polls PS/2 port 0x64 status register directly as a fallback.
-    /// 3. Translates the scancode into a `KeyEvent` (Press or Release).
-    ///
-    /// WHY IT DOES IT:
-    /// Guarantees that keystrokes pushed by the hardware interrupt handler are consumed smoothly
-    /// without missing any characters or suffering from keyboard port stalls during continuous typing.
+    /// WHAT IT DOES: Pops a scancode strictly from the IRQ1 interrupt ring buffer (`pop_scancode()`).
+    /// WHY IT DOES IT: Eliminates port 0x60 polling races, avoiding jitter and duplicate keypresses.
     pub fn read_key(&mut self) -> Option<KeyEvent> {
         // Priority 1: Read scancodes collected by IRQ1 interrupt handler
         if let Some(scancode) = crate::interrupts::pop_scancode() {
@@ -202,7 +199,12 @@ impl Keyboard {
 
             0x3A => {
                 if !released {
-                    self.caps_lock = !self.caps_lock;
+                    if !self.caps_lock_pressed {
+                        self.caps_lock = !self.caps_lock;
+                        self.caps_lock_pressed = true;
+                    }
+                } else {
+                    self.caps_lock_pressed = false;
                 }
                 Key::CapsLock
             }
@@ -249,6 +251,19 @@ impl Keyboard {
             0x31 => Key::Character(self.letter('n')),
             0x32 => Key::Character(self.letter('m')),
 
+            // Punctuation & Special Symbols
+            0x0C => Key::Character(if self.shift { '_' } else { '-' }),
+            0x0D => Key::Character(if self.shift { '+' } else { '=' }),
+            0x1A => Key::Character(if self.shift { '{' } else { '[' }),
+            0x1B => Key::Character(if self.shift { '}' } else { ']' }),
+            0x27 => Key::Character(if self.shift { ':' } else { ';' }),
+            0x28 => Key::Character(if self.shift { '"' } else { '\'' }),
+            0x29 => Key::Character(if self.shift { '~' } else { '`' }),
+            0x2B => Key::Character(if self.shift { '|' } else { '\\' }),
+            0x33 => Key::Character(if self.shift { '<' } else { ',' }),
+            0x34 => Key::Character(if self.shift { '>' } else { '.' }),
+            0x35 => Key::Character(if self.shift { '?' } else { '/' }),
+
             // F1-F12
             0x3B..=0x44 => Key::Function(code - 0x3A),
             0x57 => Key::Function(11),
@@ -266,8 +281,8 @@ impl Keyboard {
 
     /// Handles casing transformation for alphabet characters based on Shift and CapsLock state.
     fn letter(&self, c: char) -> char {
-        let upper = self.shift ^ self.caps_lock;
-        if upper {
+        let is_upper = self.caps_lock || self.shift;
+        if is_upper {
             c.to_ascii_uppercase()
         } else {
             c

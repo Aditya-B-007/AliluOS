@@ -163,6 +163,16 @@ impl FileSystem {
         segments
     }
 
+    /// Splits resolved path segments into (parent_segments, target_name).
+    pub fn split_parent_and_name<'a>(&self, resolved: &'a [String]) -> (&'a [String], &'a str) {
+        if resolved.is_empty() {
+            (&[], "")
+        } else {
+            let (parent, name) = resolved.split_at(resolved.len() - 1);
+            (parent, &name[0])
+        }
+    }
+
     /// Finds immutable reference to target `DirectoryNode` by path segments.
     pub fn find_directory(&self, segments: &[String]) -> Option<&DirectoryNode> {
         if segments.is_empty() {
@@ -249,11 +259,20 @@ impl FileSystem {
     /// - **WHEN**: Triggered by shell `write` command or `:wq` editor save.
     pub fn write_file(&mut self, parent_segments: &[String], name: &str, content: &str) -> Result<(), &'static str> {
         if let Some(parent) = self.find_directory_mut(parent_segments) {
-            if let Some(Node::File(file)) = parent.children.get_mut(name) {
-                file.content = String::from(content);
-                Ok(())
-            } else {
-                Err("File not found")
+            match parent.children.get_mut(name) {
+                Some(Node::File(file)) => {
+                    file.content = String::from(content);
+                    Ok(())
+                }
+                Some(Node::Directory(_)) => Err("Target is a directory"),
+                None => {
+                    parent.children.insert(String::from(name), Node::File(FileNode {
+                        name: String::from(name),
+                        content: String::from(content),
+                        created_at: 0,
+                    }));
+                    Ok(())
+                }
             }
         } else {
             Err("Parent directory not found")

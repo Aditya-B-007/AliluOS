@@ -11,7 +11,7 @@ use crate::vga::{Color, VGA, WRITER};
 /// Reading port 0x60 immediately in the interrupt handler prevents the hardware PS/2 controller from stalling
 /// or dropping keystrokes during fast typing or long input lines.
 pub struct ScancodeBuffer {
-    buffer: [u8; 128],
+    buffer: [u8; 256],
     head: usize,
     tail: usize,
 }
@@ -19,7 +19,7 @@ pub struct ScancodeBuffer {
 impl ScancodeBuffer {
     pub const fn new() -> Self {
         Self {
-            buffer: [0; 128],
+            buffer: [0; 256],
             head: 0,
             tail: 0,
         }
@@ -27,7 +27,7 @@ impl ScancodeBuffer {
 
     /// Pushes a scancode byte into the ring buffer (called inside IRQ1 interrupt handler).
     pub fn push(&mut self, scancode: u8) {
-        let next_head = (self.head + 1) % 128;
+        let next_head = (self.head + 1) % 256;
         if next_head != self.tail {
             self.buffer[self.head] = scancode;
             self.head = next_head;
@@ -40,7 +40,7 @@ impl ScancodeBuffer {
             None
         } else {
             let scancode = self.buffer[self.tail];
-            self.tail = (self.tail + 1) % 128;
+            self.tail = (self.tail + 1) % 256;
             Some(scancode)
         }
     }
@@ -290,22 +290,21 @@ unsafe fn outb(port: u16, value: u8) {
 }
 
 macro_rules! exception_handler {
-    ($name:ident, $msg:expr) => {
-        #[naked]
+    ($name:ident, $inner_name:ident, $msg:expr) => {
+        #[unsafe(naked)]
         unsafe extern "C" fn $name() {
-            asm!(
+            core::arch::naked_asm!(
                 "push rax", "push rcx", "push rdx", "push rsi", "push rdi",
                 "push r8", "push r9", "push r10", "push r11",
                 "call {rust_handler}",
                 "pop r11", "pop r10", "pop r9", "pop r8", "pop rdi",
                 "pop rsi", "pop rdx", "pop rcx", "pop rax",
                 "iretq",
-                rust_handler = sym $name_inner,
-                options(noreturn)
+                rust_handler = sym $inner_name,
             );
         }
 
-        extern "C" fn $name_inner() {
+        extern "C" fn $inner_name() {
             let mut vga = WRITER.lock();
             vga.set_color(Color::LightRed, Color::Black);
             vga.println("\n--- CPU EXCEPTION ---");
@@ -316,12 +315,12 @@ macro_rules! exception_handler {
     };
 }
 
-exception_handler!(divide_by_zero_handler, "Divide by Zero Exception (0x00)");
-exception_handler!(double_fault_handler, "Double Fault Exception (0x08)");
+exception_handler!(divide_by_zero_handler, divide_by_zero_inner, "Divide by Zero Exception (0x00)");
+exception_handler!(double_fault_handler, double_fault_inner, "Double Fault Exception (0x08)");
 
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn page_fault_handler() {
-    asm!(
+    core::arch::naked_asm!(
         "push rax", "push rcx", "push rdx", "push rsi", "push rdi",
         "push r8", "push r9", "push r10", "push r11",
         "mov rdi, cr2",
@@ -331,7 +330,6 @@ unsafe extern "C" fn page_fault_handler() {
         "add rsp, 8",
         "iretq",
         rust_handler = sym page_fault_inner,
-        options(noreturn)
     );
 }
 
@@ -340,7 +338,7 @@ extern "C" fn page_fault_inner(faulting_address: u64) {
     vga.set_color(Color::LightRed, Color::Black);
     vga.println("\n--- CPU EXCEPTION ---");
     vga.write("Page Fault at address: 0x");
-    let mut temp = faulting_address;
+    let temp = faulting_address;
     for i in (0..16).rev() {
         let digit = ((temp >> (i * 4)) & 0xF) as u8;
         let c = if digit < 10 { (b'0' + digit) as char } else { (b'A' + (digit - 10)) as char };
@@ -350,9 +348,9 @@ extern "C" fn page_fault_inner(faulting_address: u64) {
     loop {}
 }
 
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn timer_interrupt_handler() {
-    asm!(
+    core::arch::naked_asm!(
         "push rax", "push rcx", "push rdx", "push rsi", "push rdi",
         "push r8", "push r9", "push r10", "push r11",
         "call {rust_handler}",
@@ -360,7 +358,6 @@ unsafe extern "C" fn timer_interrupt_handler() {
         "pop rsi", "pop rdx", "pop rcx", "pop rax",
         "iretq",
         rust_handler = sym timer_interrupt_inner,
-        options(noreturn)
     );
 }
 
@@ -378,9 +375,9 @@ extern "C" fn timer_interrupt_inner() {
 ///
 /// WHY IT DOES IT:
 /// Preserves register states so kernel execution resumes transparently after the interrupt handler finishes.
-#[naked]
+#[unsafe(naked)]
 unsafe extern "C" fn keyboard_interrupt_handler() {
-    asm!(
+    core::arch::naked_asm!(
         "push rax", "push rcx", "push rdx", "push rsi", "push rdi",
         "push r8", "push r9", "push r10", "push r11",
         "call {rust_handler}",
@@ -388,7 +385,6 @@ unsafe extern "C" fn keyboard_interrupt_handler() {
         "pop rsi", "pop rdx", "pop rcx", "pop rax",
         "iretq",
         rust_handler = sym keyboard_interrupt_inner,
-        options(noreturn)
     );
 }
 

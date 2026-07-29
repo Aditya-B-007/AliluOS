@@ -52,8 +52,12 @@ impl Kernel {
         // 4. Initialize global heap memory allocator (100 KiB heap)
         crate::allocator::init_heap();
 
-        // 5. Render AliluOS welcome header and command prompt
+        // 5. Initialize PCI Network Interface Card driver
+        crate::network::NIC_DRIVER.lock().init();
+
+        // 6. Render AliluOS welcome header and command prompt
         self.boot_banner();
+
     }
 
     /// Main Kernel Execution Loop.
@@ -121,9 +125,14 @@ impl Kernel {
     /// - **WHEN**: Invoked by `handle_key_event()` for every key press.
     /// - **HOW**: Calls matching shell methods (`handle_char`, `handle_space`, `handle_enter`, `handle_backspace`, `handle_escape`).
     fn handle_key_press(&mut self, key: Key) {
+        let is_ctrl = self.keyboard.is_ctrl_pressed();
         match key {
             Key::Character(c) => {
-                self.shell.handle_char(c);
+                if is_ctrl {
+                    self.shell.handle_ctrl_char(c);
+                } else {
+                    self.shell.handle_char(c);
+                }
             }
             Key::Space => {
                 self.shell.handle_space();
