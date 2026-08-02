@@ -343,10 +343,12 @@ impl Shell {
                 vga.println("--- AliluOS System Info ---");
                 vga.set_color(Color::White, Color::Black);
                 vga.println("OS Name: AliluOS (ಅಳಿಲು)");
-                vga.println("Architecture: x86_64 Bare-Metal");
-                vga.println("Platform: Standard PC compatible");
+                vga.println("Architecture: x86_64 Bare-Metal (Configured in config.rs)");
+                vga.println("Platform: Standard PC / ATA IDE Compatible");
                 vga.println("Heap Status: 5 MiB (5120 KiB) initialized");
-                vga.println("Filesystem: B-Tree Indexed Hierarchy");
+                vga.println("Storage Engine: Persistent ATA Disk Blocks (1024 bytes/block)");
+                vga.println("Filesystem Index: On-Disk B+ Tree Data Structure");
+                vga.println("Memory Manager: RAM Virtual Address Table (VAT) Demand Paging");
                 let ticks = crate::interrupts::timer_ticks();
                 let seconds = ticks / 100;
                 vga.write("Uptime: ");

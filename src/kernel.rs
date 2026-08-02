@@ -55,7 +55,10 @@ impl Kernel {
         // 5. Initialize PCI Network Interface Card driver
         crate::network::NIC_DRIVER.lock().init();
 
-        // 6. Render AliluOS welcome header and command prompt
+        // 6. Initialize Secondary Storage Disk & B+ Tree Filesystem
+        crate::fs::FS.lock().init();
+
+        // 7. Render AliluOS welcome header and command prompt
         self.boot_banner();
 
     }

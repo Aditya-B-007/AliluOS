@@ -15,6 +15,10 @@
 extern crate alloc;
 
 // --- Subsystem Module Declarations ---
+mod config;     // Centralized Architecture & Hardware Configuration
+mod disk;       // Secondary ATA Disk Hardware Driver & Persistent Block Device
+mod btree;      // On-Disk B+ Tree Indexing Engine (1024-byte blocks)
+mod vat;        // In-Memory Virtual Address Table & Demand Paging Page Cache
 mod kernel;     // Core kernel lifecycle and event dispatcher
 mod vga;        // VGA text mode display hardware driver & global synchronized WRITER
 mod keyboard;   // PS/2 keyboard scan code translator & event queue consumer
