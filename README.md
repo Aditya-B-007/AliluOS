@@ -61,22 +61,32 @@ The project intentionally starts small and grows incrementally, implementing eac
 
 ## Folder structure
 ```
-rust-cli-os/
+AliluOS/
 │
 ├── .cargo/
 │   └── config.toml               # Configures the build target and compiler flags
 │
 ├── src/                          # The Kernel Source Code
-│   ├── main.rs                   # Kernel entry point, panic handler, and main shell loop
-│   ├── vga.rs                    # Text-mode video driver (handles printing and println!)
-│   ├── keyboard.rs               # Keyboard interrupt handling and key translation
-│   ├── interrupts.rs             # IDT, GDT, and Hardware Interrupt configurations
-│   ├── allocator.rs              # Heap allocation initialization (for dynamic strings/vecs)
-│   ├── fs.rs                     # The in-memory or basic file system (create, delete, edit)
-│   └── game.rs                   # The single built-in text game logic
+│   ├── main.rs                   # Bare-metal entry point (_start), panic handler, and module declarations
+│   ├── config.rs                 # Centralized hardware, architecture, port addresses, & process/thread limits
+│   ├── kernel.rs                 # Core kernel initialization, event loop, and thread entry points (TID 0..10)
+│   ├── process.rs                # Single-Process Resource Manager (RAM, Disk, Net bandwidth quotas)
+│   ├── thread.rs                 # Thread Control Block (TCB), CpuContext, and unified thread handler API
+│   ├── scheduler.rs             # Preemptive multi-threaded round-robin scheduler
+│   ├── disk.rs                   # Secondary ATA Disk Driver & persistent 1024-byte block storage
+│   ├── btree.rs                  # On-disk B+ Tree indexing engine (1024-byte blocks)
+│   ├── vat.rs                    # In-Memory Virtual Address Table (VAT) & demand paging page cache
+│   ├── fs.rs                     # B+ Tree indexed persistent hierarchical filesystem
+│   ├── vga.rs                    # Text-mode VGA display hardware driver (0xB8000)
+│   ├── keyboard.rs               # PS/2 keyboard driver & scancode translator
+│   ├── interrupts.rs             # GDT, IDT, PIC, PIT timer, and preemptive context switching
+│   ├── allocator.rs              # Heap allocation initialization (5 MiB memory pool)
+│   ├── shell.rs                  # Interactive CLI shell, text editor, and system/tasks resource monitor
+│   ├── network.rs                # Networking stack, smoltcp TCP/IP, RTL8139 NIC, Git client, & text browser
+│   └── game.rs                   # Built-in text games (Atari, Chess) and drawing canvas application
 │
 ├── x86_64-bare_metal.json        # Custom JSON target specification file for bare-metal x86_64
-├── Cargo.toml                    # Project dependencies (x86_64, bootloader, pc-keyboard, etc.)
+├── Cargo.toml                    # Project dependencies (x86_64, bootloader, etc.)
 └── build.rs                      # Optional build script to link files or automate image creation
 
 ```
