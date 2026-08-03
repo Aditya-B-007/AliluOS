@@ -2,9 +2,31 @@
 //!
 //! - **WHAT**: Centralized hardware, architecture, port addresses, memory layouts, and filesystem constants.
 //! - **WHY**: Isolates chip/platform specifics to facilitate easy porting across different CPU architectures (x86_64, ARM, RISC-V).
-//! - **WHEN**: Referenced by kernel hardware drivers (`vga`, `keyboard`, `interrupts`, `allocator`, `network`), secondary disk drivers (`disk`), B+ tree engine (`btree`), and RAM Virtual Address Table (`vat`).
+//! - **WHEN**: Referenced by kernel drivers, process resource manager (`process.rs`), threads (`thread.rs`), scheduler (`scheduler.rs`), disk (`disk.rs`), B+ tree (`btree.rs`), and VAT (`vat.rs`).
 
 #![allow(dead_code)]
+
+/// Single-Process Resource Management Architecture Parameters
+pub mod process {
+    /// Maximum number of active threads managed by the single kernel process
+    pub const MAX_THREADS: usize = 16;
+    /// Dedicated stack size per kernel thread (64 KiB)
+    pub const THREAD_STACK_SIZE: usize = 64 * 1024;
+    /// Primary RAM Memory Quota default limit (4 MiB)
+    pub const RAM_QUOTA_BYTES: usize = 4 * 1024 * 1024;
+    /// Secondary Disk Storage Quota default limit (2 MiB)
+    pub const DISK_QUOTA_BYTES: usize = 2 * 1024 * 1024;
+    /// Network Bandwidth Rate Limit (1 MB/s = 1,000,000 bytes/sec)
+    pub const NET_BANDWIDTH_LIMIT_BYTES_PER_SEC: u64 = 1_000_000;
+}
+
+/// Preemptive Multi-Threaded Scheduler Parameters
+pub mod scheduler {
+    /// Scheduling Time Slice Quantum in PIT timer ticks (10 ticks = 100 ms)
+    pub const TIME_SLICE_TICKS: u64 = 10;
+    /// Default thread priority level
+    pub const DEFAULT_PRIORITY: u8 = 1;
+}
 
 /// Storage & B+ Tree Filesystem Architecture Configuration
 pub mod storage {

@@ -58,7 +58,27 @@ impl Kernel {
         // 6. Initialize Secondary Storage Disk & B+ Tree Filesystem
         crate::fs::FS.lock().init();
 
-        // 7. Render AliluOS welcome header and command prompt
+        // 7. Register Threads TID 0..10 in Single-Process Resource Manager
+        {
+            let mut pm = crate::process::PROCESS_MANAGER.lock();
+            let dummy_stack_top = 0x_4444_5000_0000u64;
+            let _ = pm.register_thread("idle_thread", idle_thread_fn, dummy_stack_top);
+            let _ = pm.register_thread("shell_cli_thread", shell_cli_thread_fn, dummy_stack_top + 0x10000);
+            let _ = pm.register_thread("vat_syncer_thread", vat_syncer_thread_fn, dummy_stack_top + 0x20000);
+            let _ = pm.register_thread("net_worker_thread", net_worker_thread_fn, dummy_stack_top + 0x30000);
+            let _ = pm.register_thread("log_flush_thread", log_flush_thread_fn, dummy_stack_top + 0x40000);
+            let _ = pm.register_thread("watchdog_thread", watchdog_thread_fn, dummy_stack_top + 0x50000);
+            let _ = pm.register_thread("crypto_worker_thread", crypto_worker_thread_fn, dummy_stack_top + 0x60000);
+            let _ = pm.register_thread("ipc_router_thread", ipc_router_thread_fn, dummy_stack_top + 0x70000);
+            let _ = pm.register_thread("sensor_poll_thread", sensor_poll_thread_fn, dummy_stack_top + 0x80000);
+            let _ = pm.register_thread("deadlock_monitor_thread", deadlock_monitor_thread_fn, dummy_stack_top + 0x90000);
+            let _ = pm.register_thread("mutex_manager_thread", mutex_manager_thread_fn, dummy_stack_top + 0xA0000);
+        }
+
+        // 8. Initialize Preemptive Multi-Threaded Scheduler
+        crate::scheduler::SCHEDULER.lock().init();
+
+        // 9. Render AliluOS welcome header and command prompt
         self.boot_banner();
 
     }
@@ -92,9 +112,9 @@ impl Kernel {
         let mut vga = WRITER.lock();
         vga.set_color(Color::LightGreen, Color::Black);
 
-        vga.println("========================================");
-        vga.println("          Welcome to AliluOS");
-        vga.println("========================================");
+        vga.println("====================================================");
+        vga.println("         Yellarigu  Namaskaragalu, naanu AliluOS");
+        vga.println("====================================================");
 
         vga.set_color(Color::White, Color::Black);
 
@@ -155,3 +175,16 @@ impl Kernel {
         }
     }
 }
+
+// --- Multi-Threaded Kernel Execution Payload Functions (TID 0..10) ---
+fn idle_thread_fn() { loop { core::hint::spin_loop(); } }
+fn shell_cli_thread_fn() { loop { core::hint::spin_loop(); } }
+fn vat_syncer_thread_fn() { loop { core::hint::spin_loop(); } }
+fn net_worker_thread_fn() { loop { core::hint::spin_loop(); } }
+fn log_flush_thread_fn() { loop { core::hint::spin_loop(); } }
+fn watchdog_thread_fn() { loop { core::hint::spin_loop(); } }
+fn crypto_worker_thread_fn() { loop { core::hint::spin_loop(); } }
+fn ipc_router_thread_fn() { loop { core::hint::spin_loop(); } }
+fn sensor_poll_thread_fn() { loop { core::hint::spin_loop(); } }
+fn deadlock_monitor_thread_fn() { loop { core::hint::spin_loop(); } }
+fn mutex_manager_thread_fn() { loop { core::hint::spin_loop(); } }

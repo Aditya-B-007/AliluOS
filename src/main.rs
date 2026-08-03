@@ -16,6 +16,9 @@ extern crate alloc;
 
 // --- Subsystem Module Declarations ---
 mod config;     // Centralized Architecture & Hardware Configuration
+mod process;    // Single-Process Resource Manager
+mod thread;     // Thread Control Block & Execution Context
+mod scheduler;  // Preemptive Multi-Threaded Scheduler
 mod disk;       // Secondary ATA Disk Hardware Driver & Persistent Block Device
 mod btree;      // On-Disk B+ Tree Indexing Engine (1024-byte blocks)
 mod vat;        // In-Memory Virtual Address Table & Demand Paging Page Cache

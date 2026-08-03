@@ -356,12 +356,66 @@ impl Shell {
                 vga.println(" seconds");
             }
             "tasks" => {
-                vga.set_color(Color::LightGreen, Color::Black);
-                vga.println("--- Active Kernel Tasks ---");
-                vga.set_color(Color::White, Color::Black);
-                vga.println("PID   NAME         STATUS");
-                vga.println("0     idle_loop    RUNNING");
-                vga.println("1     shell_cli    RUNNING");
+                let mut pm = crate::process::PROCESS_MANAGER.lock();
+                if let crate::process::ProcessResourceResponse::Stats(summary) = pm.handle(crate::process::ProcessResourceRequest::GetSystemResourceStats) {
+                    vga.set_color(Color::LightGreen, Color::Black);
+                    vga.println("=== SINGLE-PROCESS RESOURCE MANAGER STATS ===");
+                    vga.set_color(Color::White, Color::Black);
+                    vga.write("PID: ");
+                    vga.println(&seconds_to_str(summary.process_id as u64));
+                    vga.write("Primary Memory Quota: ");
+                    vga.write(&seconds_to_str((summary.ram_allocated / 1024) as u64));
+                    vga.write(" / ");
+                    vga.write(&seconds_to_str((summary.ram_quota / 1024) as u64));
+                    vga.println(" KiB");
+
+                    vga.write("Secondary Disk Quota: ");
+                    vga.write(&seconds_to_str((summary.disk_allocated / 1024) as u64));
+                    vga.write(" / ");
+                    vga.write(&seconds_to_str((summary.disk_quota / 1024) as u64));
+                    vga.println(" KiB");
+
+                    vga.write("Network Bandwidth Rate: ");
+                    vga.write(&seconds_to_str(summary.net_bandwidth_limit / 1000));
+                    vga.println(" KB/s");
+
+                    vga.set_color(Color::LightCyan, Color::Black);
+                    vga.println("\n=== KERNEL EXECUTION THREADS (TID 0..10) ===");
+                    vga.println("TID  NAME                    STATE     STACK     RAM");
+                    vga.set_color(Color::White, Color::Black);
+
+                    for t in summary.thread_stats {
+                        vga.write(&seconds_to_str(t.tid as u64));
+                        vga.write("    ");
+                        let pad = 24 - t.name.len().min(23);
+                        vga.write(&t.name);
+                        for _ in 0..pad { vga.write(" "); }
+                        
+                        match t.state {
+                            crate::thread::ThreadState::Running => {
+                                vga.set_color(Color::LightGreen, Color::Black);
+                                vga.write("RUNNING   ");
+                            }
+                            crate::thread::ThreadState::Ready => {
+                                vga.set_color(Color::Yellow, Color::Black);
+                                vga.write("READY     ");
+                            }
+                            crate::thread::ThreadState::Blocked => {
+                                vga.set_color(Color::LightRed, Color::Black);
+                                vga.write("BLOCKED   ");
+                            }
+                            crate::thread::ThreadState::Terminated => {
+                                vga.set_color(Color::DarkGray, Color::Black);
+                                vga.write("TERMINATED");
+                            }
+                        }
+                        vga.set_color(Color::White, Color::Black);
+                        vga.write(&seconds_to_str((t.stack_size / 1024) as u64));
+                        vga.write(" KiB  ");
+                        vga.write(&seconds_to_str((t.allocated_ram / 1024) as u64));
+                        vga.println(" KiB");
+                    }
+                }
             }
             "directory" => {
                 self.print_cwd_path(&mut vga);
