@@ -1,7 +1,7 @@
-//! # AliluOS Thread Control Block & Execution Context (`thread.rs`)
+//! # AliluOS Thread Control Block & Ring Privilege Context (`ring2/thread.rs`)
 //!
-//! - **WHAT**: Execution Thread Control Block (TCB) and x86_64 CPU register context manager.
-//! - **WHY**: Threads are the sole execution entities in AliluOS. They hold execution state (`RIP`, `RSP`, registers).
+//! - **WHAT**: Execution Thread Control Block (TCB), x86_64 CPU register context, and Ring Privilege Level manager.
+//! - **WHY**: Threads are the sole execution entities in AliluOS. Each thread executes at an assigned Privilege Ring Level (Ring 0, Ring 1, or Ring 2).
 //! - **WHEN**: Instantiated during kernel boot and scheduled by the thread scheduler (`scheduler.rs`).
 //! - **HOW**: Exposes **a single unified handler method (`handle_request`)** to the Process Resource Manager for all thread interactions.
 
@@ -9,6 +9,15 @@
 
 use alloc::string::String;
 use crate::config::process::THREAD_STACK_SIZE;
+use crate::config::gdt::*;
+
+/// CPU Hardware Privilege Ring Level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivilegeLevel {
+    Ring0, // Kernel Core
+    Ring1, // Resource Manager & Drivers
+    Ring2, // User Mode & Applications
+}
 
 /// Thread Execution Lifecycle State.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +79,7 @@ pub struct ThreadStats {
     pub tid: usize,
     pub name: String,
     pub state: ThreadState,
+    pub ring: PrivilegeLevel,
     pub priority: u8,
     pub stack_size: usize,
     pub allocated_ram: usize,
@@ -91,6 +101,7 @@ pub struct ThreadControlBlock {
     pub tid: usize,
     pub name: String,
     pub state: ThreadState,
+    pub ring: PrivilegeLevel,
     pub priority: u8,
     pub context: CpuContext,
     pub stack_base: u64,
@@ -101,16 +112,32 @@ pub struct ThreadControlBlock {
 }
 
 impl ThreadControlBlock {
-    /// Constructs a new Thread Control Block.
-    pub fn new(tid: usize, name: &str, entry_fn: fn(), stack_top: u64) -> Self {
+    /// Constructs a new Thread Control Block with specific Privilege Ring assignment.
+    pub fn new_with_ring(tid: usize, name: &str, ring: PrivilegeLevel, entry_fn: fn(), stack_top: u64) -> Self {
         let mut ctx = CpuContext::empty();
         ctx.rip = entry_fn as u64;
         ctx.rsp = stack_top;
+
+        match ring {
+            PrivilegeLevel::Ring0 => {
+                ctx.cs = KERNEL_CODE_SEL as u64;
+                ctx.ss = KERNEL_DATA_SEL as u64;
+            }
+            PrivilegeLevel::Ring1 => {
+                ctx.cs = DRIVER_CODE_SEL as u64;
+                ctx.ss = DRIVER_DATA_SEL as u64;
+            }
+            PrivilegeLevel::Ring2 => {
+                ctx.cs = USER_CODE_SEL as u64;
+                ctx.ss = USER_DATA_SEL as u64;
+            }
+        }
 
         Self {
             tid,
             name: String::from(name),
             state: ThreadState::Ready,
+            ring,
             priority: 1,
             context: ctx,
             stack_base: stack_top.saturating_sub(THREAD_STACK_SIZE as u64),
@@ -119,6 +146,11 @@ impl ThreadControlBlock {
             allocated_disk_blocks: 0,
             net_bandwidth_tokens: 1000,
         }
+    }
+
+    /// Legacy constructor defaulting to Ring 0.
+    pub fn new(tid: usize, name: &str, entry_fn: fn(), stack_top: u64) -> Self {
+        Self::new_with_ring(tid, name, PrivilegeLevel::Ring0, entry_fn, stack_top)
     }
 
     /// Single Unified Method for Process/System Interaction.
@@ -142,6 +174,7 @@ impl ThreadControlBlock {
                 tid: self.tid,
                 name: self.name.clone(),
                 state: self.state,
+                ring: self.ring,
                 priority: self.priority,
                 stack_size: self.stack_size,
                 allocated_ram: self.allocated_ram,

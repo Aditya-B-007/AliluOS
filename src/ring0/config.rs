@@ -1,10 +1,22 @@
-//! # AliluOS Architecture & Hardware Configuration (`config.rs`)
+//! # AliluOS Architecture & Hardware Configuration (`ring0/config.rs`)
 //!
-//! - **WHAT**: Centralized hardware, architecture, port addresses, memory layouts, and filesystem constants.
-//! - **WHY**: Isolates chip/platform specifics to facilitate easy porting across different CPU architectures (x86_64, ARM, RISC-V).
-//! - **WHEN**: Referenced by kernel drivers, process resource manager (`process.rs`), threads (`thread.rs`), scheduler (`scheduler.rs`), disk (`disk.rs`), B+ tree (`btree.rs`), and VAT (`vat.rs`).
+//! - **WHAT**: Centralized hardware, architecture, port addresses, privilege ring selectors, and memory parameters.
+//! - **WHY**: Isolates chip/platform specifics and segment privilege levels across Ring 0, Ring 1, and Ring 2.
+//! - **WHEN**: Referenced by kernel drivers, Process Resource Manager, threads, scheduler, disk, B+ tree, and VAT.
 
 #![allow(dead_code)]
+
+/// x86_64 Segment Selectors & Privilege Ring Architecture
+pub mod gdt {
+    pub const KERNEL_CODE_SEL: u16 = 0x08; // Ring 0, DPL=0
+    pub const KERNEL_DATA_SEL: u16 = 0x10; // Ring 0, DPL=0
+    pub const DRIVER_CODE_SEL: u16 = 0x1B; // Ring 1, DPL=1 (0x18 | 3... 0x18 | 1 = 0x19, DPL=1)
+    pub const DRIVER_DATA_SEL: u16 = 0x23; // Ring 1, DPL=1
+    pub const USER_CODE_SEL:   u16 = 0x2B; // Ring 2, DPL=2 (0x28 | 2 = 0x2A/0x2B)
+    pub const USER_DATA_SEL:   u16 = 0x33; // Ring 2, DPL=2
+    pub const TSS_SEL:         u16 = 0x3B; // Task State Segment
+    pub const SYSCALL_INT_VECTOR: u8 = 0x80;
+}
 
 /// Single-Process Resource Management Architecture Parameters
 pub mod process {
@@ -16,7 +28,7 @@ pub mod process {
     pub const RAM_QUOTA_BYTES: usize = 4 * 1024 * 1024;
     /// Secondary Disk Storage Quota default limit (2 MiB)
     pub const DISK_QUOTA_BYTES: usize = 2 * 1024 * 1024;
-    /// Network Bandwidth Rate Limit (1 MB/s = 1,000,000 bytes/sec)
+    /// Network Bandwidth Rate Limit (1 MB/s)
     pub const NET_BANDWIDTH_LIMIT_BYTES_PER_SEC: u64 = 1_000_000;
 }
 
@@ -40,7 +52,7 @@ pub mod storage {
     pub const SUPERBLOCK_BLOCK_ID: u64 = 0;
     /// Superblock magic identifier signature ("ALILUOS1")
     pub const SUPERBLOCK_MAGIC: u64 = 0x414C494C554F5331;
-    /// Total block capacity of disk storage volume (e.g. 4096 blocks = 4 MiB volume)
+    /// Total block capacity of disk storage volume (4096 blocks = 4 MiB volume)
     pub const TOTAL_DISK_BLOCKS: usize = 4096;
     /// Maximum children/keys branching factor per B+ Tree node
     pub const BTREE_MAX_KEYS: usize = 8;

@@ -1,20 +1,16 @@
-//! # AliluOS Interactive Shell Engine (`shell.rs`)
+//! # AliluOS Interactive Shell Engine (`ring2/shell.rs`)
 //!
-//! - **WHAT**: Command processor, line buffer manager, interactive text editor, and Help Viewer for AliluOS.
-//! - **WHY**: Provides human-readable plain English command input, file operations, system stats, and interactive documentation.
-//! - **WHEN**: Triggered on every user keystroke dispatched from `Kernel::handle_key_press()`.
-//! - **HOW**: Maintains state for active `ShellMode` (`Command`, `Editor`, `HelpViewer`), parses input strings on `Enter`,
-//!   and interacts with the global B-Tree filesystem (`FS`) and synchronized VGA console (`WRITER`).
+//! - **WHAT**: Command processor, line buffer manager, interactive text editor, and tasks monitor.
+//! - **WHY**: Provides human-readable plain English command input, file operations, system stats, and privilege ring thread stats.
+//! - **WHEN**: Executed by `shell_cli_thread` (TID 1, Ring 2).
+
+#![allow(dead_code)]
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::vga::{Color, WRITER, VGA};
 use crate::fs::{FS, Node};
 
-/// Shell Operating Modes enumeration.
-///
-/// - **WHAT**: Tracks whether the user is typing standard commands (`Command`), editing a file (`Editor`), or viewing help (`HelpViewer`).
-/// - **WHY**: Input keys (`Enter`, `Backspace`, `Escape`, characters) behave differently depending on active mode.
 #[derive(PartialEq, Eq)]
 enum ShellMode {
     Command,
@@ -22,21 +18,16 @@ enum ShellMode {
     HelpViewer,
 }
 
-/// Main Shell Engine State.
-///
-/// - **WHAT**: Stores active line buffer, active mode, current working directory (CWD) path segments, and editor state.
-/// - **WHY**: Retains user context across keystrokes.
 pub struct Shell {
-    buffer: String,             // Buffer storing current command line input
-    mode: ShellMode,            // Active mode (Command vs. Editor vs. HelpViewer)
-    editor_filename: String,    // Name of file currently being edited
-    editor_buffer: String,      // Buffer storing accumulating text in editor mode
-    save_pending: bool,         // Flag tracking Ctrl+S save readiness
-    cwd: Vec<String>,           // Current Working Directory path segments
+    buffer: String,
+    mode: ShellMode,
+    editor_filename: String,
+    editor_buffer: String,
+    save_pending: bool,
+    cwd: Vec<String>,
 }
 
 impl Shell {
-    /// Constructs a new Shell instance with root directory `CWD = []`.
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
@@ -48,13 +39,6 @@ impl Shell {
         }
     }
 
-    /// Handles Escape key press.
-    ///
-    /// - **WHAT**:
-    ///   - In `HelpViewer` mode: exits help view, clears screen, and restores command prompt `> `.
-    ///   - In `Command` mode: clears active command input line (`^C`).
-    /// - **WHY**: Provides a dedicated, predictable key action to close modal overlays or reset command line input.
-    /// - **WHEN**: Triggered whenever the user presses `Escape`.
     pub fn handle_escape(&mut self) {
         match self.mode {
             ShellMode::HelpViewer => {
@@ -89,7 +73,6 @@ impl Shell {
         }
     }
 
-    /// Handles Ctrl+Key shortcuts (e.g. Ctrl+S then Ctrl+K for editor save).
     pub fn handle_ctrl_char(&mut self, c: char) {
         let lower = c.to_ascii_lowercase();
         if self.mode == ShellMode::Editor {
@@ -135,11 +118,6 @@ impl Shell {
         }
     }
 
-    /// Handles character input keypresses.
-    ///
-    /// - **WHAT**: Appends character to active buffer (`buffer` or `editor_buffer`) and echoes to VGA.
-    /// - **WHY**: Accumulates text for command execution or file editing.
-    /// - **WHEN**: Called for character keystrokes.
     pub fn handle_char(&mut self, c: char) {
         let mut vga = WRITER.lock();
         match self.mode {
@@ -151,17 +129,10 @@ impl Shell {
                 self.editor_buffer.push(c);
                 vga.put_char(c);
             }
-            ShellMode::HelpViewer => {
-                // Keystrokes ignored in HelpViewer mode until Escape is pressed
-            }
+            ShellMode::HelpViewer => {}
         }
     }
 
-    /// Handles Backspace keypresses.
-    ///
-    /// - **WHAT**: Removes last character from buffer and erases character on VGA display.
-    /// - **WHY**: Corrects typing mistakes in command line or text editor.
-    /// - **WHEN**: Called when user presses `Backspace`.
     pub fn handle_backspace(&mut self) {
         let mut vga = WRITER.lock();
         match self.mode {
@@ -181,7 +152,6 @@ impl Shell {
         }
     }
 
-    /// Handles Space keypresses.
     pub fn handle_space(&mut self) {
         let mut vga = WRITER.lock();
         match self.mode {
@@ -197,13 +167,6 @@ impl Shell {
         }
     }
 
-    /// Handles Enter keypresses.
-    ///
-    /// - **WHAT**:
-    ///   - In `Command` mode: executes command stored in `buffer` and re-prints `> `.
-    ///   - In `Editor` mode: inserts newline or evaluates `:wq` / `:q` exit commands.
-    /// - **WHY**: Commits user input for execution or text persistence.
-    /// - **WHEN**: Called when user presses `Enter`.
     pub fn handle_enter(&mut self) {
         let mut vga = WRITER.lock();
         vga.put_char('\n');
@@ -271,7 +234,6 @@ impl Shell {
         }
     }
 
-    /// Helper printing current working directory path.
     fn print_cwd_path(&self, vga: &mut VGA) {
         if self.cwd.is_empty() {
             vga.println("/");
@@ -284,12 +246,6 @@ impl Shell {
         }
     }
 
-    /// Command Line Parser and Executor.
-    ///
-    /// - **WHAT**: Parses command string into command name and arguments, then dispatches to subsystem handlers.
-    /// - **WHY**: Core CLI interface for AliluOS.
-    /// - **WHEN**: Triggered by `handle_enter()` in `Command` mode.
-    /// - **HOW**: Matches command strings (`help`, `clear`, `system`, `tasks`, `directory`, `enter`, `folder`, `list`, `create`, `write`, `read`, `delete`, `edit`, `play`, `draw`, `echo`).
     fn execute_command(&mut self, cmd_line: &str) {
         let trimmed = cmd_line.trim();
         if trimmed.is_empty() {
@@ -300,7 +256,6 @@ impl Shell {
         let command = parts.next().unwrap_or("");
         let args: Vec<&str> = parts.collect();
 
-        // Display inline Shell Command Manual on `help` or `--help`
         if command == "help" || args.contains(&"--help") || args.contains(&"-h") {
             let mut vga = WRITER.lock();
             vga.set_color(Color::LightCyan, Color::Black);
@@ -311,7 +266,7 @@ impl Shell {
             vga.println("  help                       - Display this command manual");
             vga.println("  clear                      - Clear display screen");
             vga.println("  system                     - Display system specs, memory & timer stats");
-            vga.println("  tasks                      - List active kernel CPU tasks");
+            vga.println("  tasks                      - List single-process resources & privilege ring threads");
             vga.println("  list                       - List files/folders (B-Tree sorted)");
             vga.println("  directory                  - Print current working directory path");
             vga.println("  enter [path]               - Enter directory folder");
@@ -323,14 +278,11 @@ impl Shell {
             vga.println("  delete [file/folder]       - Delete a file or folder from B-Tree index");
             vga.println("  edit [file]                - Open interactive text editor");
             vga.println("  play [atari / chess]       - Launch built-in text game");
-            vga.println("  browse [query]             - Open DuckDuckGo search browser (Type & Enter to Search)");
-            vga.println("  git clone [url]            - Clone git repository into B-Tree index");
-            vga.println("  git download               - Download git software tool");
+            vga.println("  browse [query]             - Open DuckDuckGo search browser");
             vga.println("  echo [text]                - Print text back to screen");
             vga.set_color(Color::White, Color::Black);
             return;
         }
-
 
         let mut vga = WRITER.lock();
 
@@ -343,8 +295,8 @@ impl Shell {
                 vga.println("--- AliluOS System Info ---");
                 vga.set_color(Color::White, Color::Black);
                 vga.println("OS Name: AliluOS (ಅಳಿಲು)");
-                vga.println("Architecture: x86_64 Bare-Metal (Configured in config.rs)");
-                vga.println("Platform: Standard PC / ATA IDE Compatible");
+                vga.println("Architecture: x86_64 Privilege Ring Bifurcation (Ring 0, Ring 1, Ring 2)");
+                vga.println("Process Model: Single-Process Resource Manager (PID 1)");
                 vga.println("Heap Status: 5 MiB (5120 KiB) initialized");
                 vga.println("Storage Engine: Persistent ATA Disk Blocks (1024 bytes/block)");
                 vga.println("Filesystem Index: On-Disk B+ Tree Data Structure");
@@ -381,7 +333,7 @@ impl Shell {
 
                     vga.set_color(Color::LightCyan, Color::Black);
                     vga.println("\n=== KERNEL EXECUTION THREADS (TID 0..10) ===");
-                    vga.println("TID  NAME                    STATE     STACK     RAM");
+                    vga.println("TID  NAME                    RING           STATE     STACK");
                     vga.set_color(Color::White, Color::Black);
 
                     for t in summary.thread_stats {
@@ -391,6 +343,21 @@ impl Shell {
                         vga.write(&t.name);
                         for _ in 0..pad { vga.write(" "); }
                         
+                        match t.ring {
+                            crate::thread::PrivilegeLevel::Ring0 => {
+                                vga.set_color(Color::LightRed, Color::Black);
+                                vga.write("Ring0/Kernel  ");
+                            }
+                            crate::thread::PrivilegeLevel::Ring1 => {
+                                vga.set_color(Color::Yellow, Color::Black);
+                                vga.write("Ring1/Driver  ");
+                            }
+                            crate::thread::PrivilegeLevel::Ring2 => {
+                                vga.set_color(Color::LightCyan, Color::Black);
+                                vga.write("Ring2/UserApp ");
+                            }
+                        }
+
                         match t.state {
                             crate::thread::ThreadState::Running => {
                                 vga.set_color(Color::LightGreen, Color::Black);
@@ -411,8 +378,6 @@ impl Shell {
                         }
                         vga.set_color(Color::White, Color::Black);
                         vga.write(&seconds_to_str((t.stack_size / 1024) as u64));
-                        vga.write(" KiB  ");
-                        vga.write(&seconds_to_str((t.allocated_ram / 1024) as u64));
                         vga.println(" KiB");
                     }
                 }
@@ -447,20 +412,6 @@ impl Shell {
                     vga.println("Already at root directory (/).");
                 }
             }
-            "cd" => {
-                let path = if args.is_empty() { ".." } else { args[0] };
-                let mut fs = FS.lock();
-                let resolved = fs.resolve_path(&self.cwd, path);
-                if fs.find_directory(&resolved).is_some() {
-                    self.cwd = resolved;
-                    vga.write("Changed directory to: ");
-                    self.print_cwd_path(&mut vga);
-                } else {
-                    vga.set_color(Color::LightRed, Color::Black);
-                    vga.println("Error: Directory not found.");
-                    vga.set_color(Color::White, Color::Black);
-                }
-            }
             "folder" => {
                 if args.is_empty() {
                     vga.println("Usage: folder [name]");
@@ -474,9 +425,9 @@ impl Shell {
                     vga.println("Error: Invalid directory name");
                     return;
                 }
-                let ticks = unsafe { crate::interrupts::timer_ticks() };
+                let ticks = crate::interrupts::timer_ticks();
                 match fs.create_directory(parent_segments, dir_name, ticks) {
-                    Ok(_) => vga.println("Directory folder created successfully in B-Tree index."),
+                    Ok(_) => vga.println("Directory folder created successfully in B+ Tree index."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
                         vga.println(e);
@@ -496,15 +447,13 @@ impl Shell {
                             for (name, is_dir) in items {
                                 let padding = 20 - name.len().min(19);
                                 vga.write(&name);
-                                for _ in 0..padding {
-                                    vga.write(" ");
-                                }
+                                for _ in 0..padding { vga.write(" "); }
                                 if is_dir {
                                     vga.set_color(Color::LightBlue, Color::Black);
                                     vga.println("<DIR>");
                                     vga.set_color(Color::White, Color::Black);
                                 } else {
-                                    vga.println("File");
+                                    vga.println("<FILE>");
                                 }
                             }
                         }
@@ -521,34 +470,17 @@ impl Shell {
                     vga.println("Usage: create [filename]");
                     return;
                 }
-                let raw_path = args[0];
-                let final_path = match normalize_and_validate_filename(raw_path) {
-                    Ok(p) => p,
-                    Err(err) => {
-                        vga.set_color(Color::LightRed, Color::Black);
-                        vga.println(err);
-                        vga.set_color(Color::White, Color::Black);
-                        return;
-                    }
-                };
-
+                let path_str = args[0];
                 let mut fs = FS.lock();
-                let resolved = fs.resolve_path(&self.cwd, &final_path);
-                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
-                if target_name.is_empty() {
+                let resolved = fs.resolve_path(&self.cwd, path_str);
+                let (parent_segments, file_name) = fs.split_parent_and_name(&resolved);
+                if file_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-
                 let ticks = crate::interrupts::timer_ticks();
-                match fs.create_file(parent_segments, target_name, ticks) {
-                    Ok(_) => {
-                        vga.set_color(Color::LightGreen, Color::Black);
-                        vga.write("File '");
-                        vga.write(target_name);
-                        vga.println("' created successfully in B-Tree index.");
-                        vga.set_color(Color::White, Color::Black);
-                    }
+                match fs.create_file(parent_segments, file_name, ticks) {
+                    Ok(_) => vga.println("File created successfully in B+ Tree index."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
                         vga.println(e);
@@ -558,20 +490,20 @@ impl Shell {
             }
             "write" => {
                 if args.len() < 2 {
-                    vga.println("Usage: write [filename] [text]");
+                    vga.println("Usage: write [filename] [text...]");
                     return;
                 }
                 let path_str = args[0];
-                let text = args[1..].join(" ");
+                let content = args[1..].join(" ");
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
-                if target_name.is_empty() {
+                let (parent_segments, file_name) = fs.split_parent_and_name(&resolved);
+                if file_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                match fs.write_file(parent_segments, target_name, &text) {
-                    Ok(_) => vga.println("Text written to file in B-Tree index."),
+                match fs.write_file(parent_segments, file_name, &content) {
+                    Ok(_) => vga.println("Written to file successfully."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
                         vga.println(e);
@@ -587,16 +519,17 @@ impl Shell {
                 let path_str = args[0];
                 let fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
-                if target_name.is_empty() {
+                let (parent_segments, file_name) = fs.split_parent_and_name(&resolved);
+                if file_name.is_empty() {
                     vga.println("Error: Invalid filename");
                     return;
                 }
-                match fs.read_file(parent_segments, target_name) {
+                match fs.read_file(parent_segments, file_name) {
                     Ok(content) => {
-                        vga.println("--- Content ---");
+                        vga.set_color(Color::LightGreen, Color::Black);
+                        vga.println("--- File Content ---");
+                        vga.set_color(Color::White, Color::Black);
                         vga.println(&content);
-                        vga.println("---------------");
                     }
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
@@ -607,19 +540,19 @@ impl Shell {
             }
             "delete" => {
                 if args.is_empty() {
-                    vga.println("Usage: delete [filename/folder]");
+                    vga.println("Usage: delete [name]");
                     return;
                 }
                 let path_str = args[0];
                 let mut fs = FS.lock();
                 let resolved = fs.resolve_path(&self.cwd, path_str);
-                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
-                if target_name.is_empty() {
-                    vga.println("Error: Invalid target");
+                let (parent_segments, file_name) = fs.split_parent_and_name(&resolved);
+                if file_name.is_empty() {
+                    vga.println("Error: Invalid name");
                     return;
                 }
-                match fs.delete_node(parent_segments, target_name) {
-                    Ok(_) => vga.println("Target deleted successfully from B-Tree index."),
+                match fs.delete_node(parent_segments, file_name) {
+                    Ok(_) => vga.println("Target deleted successfully."),
                     Err(e) => {
                         vga.set_color(Color::LightRed, Color::Black);
                         vga.println(e);
@@ -632,144 +565,67 @@ impl Shell {
                     vga.println("Usage: edit [filename]");
                     return;
                 }
-                let raw_path = args[0];
-                let final_path = match normalize_and_validate_filename(raw_path) {
-                    Ok(p) => p,
-                    Err(err) => {
-                        vga.set_color(Color::LightRed, Color::Black);
-                        vga.println(err);
-                        vga.set_color(Color::White, Color::Black);
-                        return;
-                    }
-                };
-
-                let mut fs = FS.lock();
-                let resolved = fs.resolve_path(&self.cwd, &final_path);
-                let (parent_segments, target_name) = fs.split_parent_and_name(&resolved);
-                if target_name.is_empty() {
-                    vga.println("Error: Invalid filename");
-                    return;
+                let path_str = args[0];
+                self.editor_filename = String::from(path_str);
+                let fs = FS.lock();
+                let resolved = fs.resolve_path(&self.cwd, path_str);
+                let (parent_segments, file_name) = fs.split_parent_and_name(&resolved);
+                
+                if let Ok(existing) = fs.read_file(parent_segments, file_name) {
+                    self.editor_buffer = existing;
+                } else {
+                    self.editor_buffer = String::new();
                 }
 
-                let dir_items = fs.list_directory(parent_segments).unwrap_or_else(|_| Vec::new());
-                let file_exists = dir_items.iter().any(|(name, is_dir)| name == target_name && !is_dir);
-
-                if !file_exists {
-                    let ticks = crate::interrupts::timer_ticks();
-                    let _ = fs.create_file(parent_segments, target_name, ticks);
-                }
-
-                let current_content = fs.read_file(parent_segments, target_name).unwrap_or_else(|_| String::new());
-                self.editor_filename = final_path.clone();
-                self.editor_buffer = current_content.clone();
                 self.mode = ShellMode::Editor;
-                self.save_pending = false;
-
                 vga.clear();
                 vga.set_color(Color::LightCyan, Color::Black);
-                vga.write("--- Editing File: ");
-                vga.write(target_name);
-                vga.println(" ---");
-                vga.println("Type your text below. Save & Exit: Ctrl+S + Ctrl+K  | Exit without saving: ESC");
-                vga.println("------------------------------------------------------------------------");
+                vga.write("=== AliluOS Interactive Editor: ");
+                vga.write(path_str);
+                vga.println(" ===");
                 vga.set_color(Color::White, Color::Black);
-                vga.write(&current_content);
+                vga.println("Type content below. Commands: Type ':wq' on new line to save & exit, ':q' to exit.\n");
+                vga.write(&self.editor_buffer.clone());
             }
             "play" => {
                 if args.is_empty() {
                     vga.println("Usage: play [atari / chess]");
                     return;
                 }
-                drop(vga);
-                match args[0] {
-                    "atari" => crate::game::start_atari(),
-                    "chess" => crate::game::start_chess(),
-                    _ => WRITER.lock().println("Unknown game. Choose 'atari' or 'chess'."),
-                }
-            }
-            "draw" => {
-                drop(vga);
-                crate::game::start_canvas();
-            }
-            "browse" | "web" => {
-                let initial_query = args.join(" ");
-                drop(vga);
-                crate::network::start_browser(&initial_query);
-            }
-            "git" => {
-                if args.is_empty() {
-                    vga.println("Usage: git clone [repo_url] | git download");
-                    return;
-                }
-                drop(vga);
-                if args[0] == "download" {
-                    let _ = crate::network::download_git_software();
-                } else if args[0] == "clone" && args.len() > 1 {
-                    let _ = crate::network::git_clone(args[1]);
+                if args[0] == "atari" {
+                    crate::game::GAME.lock().start_atari();
+                } else if args[0] == "chess" {
+                    crate::game::GAME.lock().start_chess();
                 } else {
-                    WRITER.lock().println("Usage: git clone [repo_url] | git download");
+                    vga.println("Unknown game. Choose: atari or chess");
                 }
             }
             "echo" => {
-                let text = args.join(" ");
-                vga.println(&text);
+                vga.println(&args.join(" "));
             }
             _ => {
                 vga.set_color(Color::LightRed, Color::Black);
-                vga.write("Command not recognized: ");
-                vga.println(command);
+                vga.write("Unknown command: '");
+                vga.write(command);
+                vga.println("'. Type 'help' for manual.");
                 vga.set_color(Color::White, Color::Black);
-                vga.println("Type 'help' to view all commands.");
             }
         }
     }
 }
 
-
-/// Formats seconds integer into a string.
-fn seconds_to_str(secs: u64) -> String {
+fn seconds_to_str(mut sec: u64) -> String {
+    if sec == 0 { return String::from("0"); }
+    let mut buf = [0u8; 20];
+    let mut i = 0;
+    while sec > 0 {
+        buf[i] = b'0' + (sec % 10) as u8;
+        sec /= 10;
+        i += 1;
+    }
     let mut s = String::new();
-    let mut temp = secs;
-    if temp == 0 {
-        s.push('0');
-        return s;
-    }
-    let mut digits = Vec::new();
-    while temp > 0 {
-        digits.push((b'0' + (temp % 10) as u8) as char);
-        temp /= 10;
-    }
-    for &c in digits.iter().rev() {
-        s.push(c);
+    for j in (0..i).rev() {
+        s.push(buf[j] as char);
     }
     s
-}
-
-/// Validates file extensions and defaults to `.txt` if no extension is specified.
-fn normalize_and_validate_filename(path_str: &str) -> Result<String, &'static str> {
-    let filename = if let Some(idx) = path_str.rfind('/') {
-        &path_str[idx + 1..]
-    } else {
-        path_str
-    };
-
-    if !filename.contains('.') {
-        let mut formatted = String::from(path_str);
-        formatted.push_str(".txt");
-        Ok(formatted)
-    } else {
-        let ext = &filename[filename.rfind('.').unwrap() + 1..];
-        let ext_lower = ext.to_lowercase();
-        let allowed = [
-            "txt", "md", "doc",
-            "rs", "c", "h", "cpp", "hpp", "py", "js", "ts", "jsx", "tsx",
-            "html", "htm", "css", "java", "kt", "sh", "bat", "ps1",
-            "json", "toml", "yaml", "yml", "xml", "ini", "asm", "s"
-        ];
-        if allowed.contains(&ext_lower.as_str()) {
-            Ok(String::from(path_str))
-        } else {
-            Err("Error: Unsupported file type. Only text (.txt) and source code files (.rs, .c, .py, .js, .cpp, .html, .css, etc.) are allowed.")
-        }
-    }
 }

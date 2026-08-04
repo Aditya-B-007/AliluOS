@@ -1,18 +1,11 @@
-//! # AliluOS Preemptive Multi-Threaded Scheduler (`scheduler.rs`)
-//!
-//! - **WHAT**: Round-Robin preemptive thread context scheduler.
-//! - **WHY**: Dispatches execution time across kernel threads (TID 0 to 10) driven by PIT IRQ0 timer ticks.
-//! - **WHEN**: Triggered on every PIT timer interrupt (100 Hz).
-//! - **HOW**: Saves current thread CPU registers (`CpuContext`), updates thread state, selects next `Ready` thread, and switches context.
+//! # AliluOS Preemptive Multi-Threaded Scheduler (`ring0/scheduler.rs`)
 
 #![allow(dead_code)]
 
-use alloc::vec::Vec;
 use crate::config::scheduler::TIME_SLICE_TICKS;
 use crate::thread::{CpuContext, ThreadState};
 use crate::process::PROCESS_MANAGER;
 
-/// Multi-Threaded Kernel Scheduler State.
 pub struct Scheduler {
     pub current_tid: usize,
     pub ticks_remaining: u64,
@@ -28,7 +21,6 @@ impl Scheduler {
         }
     }
 
-    /// Initializes scheduler state.
     pub fn init(&mut self) {
         if !self.initialized {
             self.initialized = true;
@@ -36,7 +28,6 @@ impl Scheduler {
         }
     }
 
-    /// Invoked on every PIT timer tick (100 Hz) to perform preemptive thread scheduling.
     pub fn tick_and_schedule(&mut self, ctx: &mut CpuContext) {
         if !self.initialized {
             return;
@@ -47,7 +38,6 @@ impl Scheduler {
             return;
         }
 
-        // Time slice expired: reset timer quantum and context switch
         self.ticks_remaining = TIME_SLICE_TICKS;
 
         let mut pm = PROCESS_MANAGER.lock();
@@ -56,7 +46,6 @@ impl Scheduler {
             return;
         }
 
-        // Save current thread's CPU register context
         let prev_tid = self.current_tid;
         if let Some(prev_tcb) = pm.threads.get_mut(prev_tid) {
             prev_tcb.context = *ctx;
@@ -65,7 +54,6 @@ impl Scheduler {
             }
         }
 
-        // Round-robin selection of next Ready thread
         let mut next_tid = (prev_tid + 1) % total_threads;
         for _ in 0..total_threads {
             if let Some(tcb) = pm.threads.get(next_tid) {
@@ -76,7 +64,6 @@ impl Scheduler {
             next_tid = (next_tid + 1) % total_threads;
         }
 
-        // Switch execution context to next thread
         self.current_tid = next_tid;
         if let Some(next_tcb) = pm.threads.get_mut(next_tid) {
             next_tcb.state = ThreadState::Running;
@@ -85,5 +72,4 @@ impl Scheduler {
     }
 }
 
-/// Global Thread-Safe Instance of the Multi-Threaded Scheduler.
 pub static SCHEDULER: crate::vga::Locked<Scheduler> = crate::vga::Locked::new(Scheduler::new());

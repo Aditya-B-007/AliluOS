@@ -1,9 +1,4 @@
-//! # AliluOS On-Disk B+ Tree Indexing Subsystem (`btree.rs`)
-//!
-//! - **WHAT**: On-disk B+ Tree data structure operating over 1024-byte disk blocks.
-//! - **WHY**: Organizes directory structures, file paths, inodes, and file data block pointers persistently on disk.
-//! - **WHEN**: Called by `fs.rs` when looking up, creating, writing, or deleting files and folders.
-//! - **HOW**: Serializes internal node keys/children pointers and leaf node key/metadata entries into 1024-byte disk blocks (`disk.rs`).
+//! # AliluOS On-Disk B+ Tree Indexing Subsystem (`ring1/btree.rs`)
 
 #![allow(dead_code)]
 
@@ -12,7 +7,6 @@ use alloc::vec::Vec;
 use crate::config::storage::*;
 use crate::disk::DISK;
 
-/// On-Disk Superblock Header Structure (1024 bytes).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Superblock {
@@ -22,23 +16,20 @@ pub struct Superblock {
     pub free_blocks: u64,
 }
 
-/// Metadata stored in B+ Tree Leaf Node values for files and directories.
 #[derive(Clone, Debug)]
 pub struct BPlusEntryMeta {
     pub is_directory: bool,
     pub size: u64,
     pub created_at: u64,
-    pub data_blocks: Vec<u64>, // List of allocated 1024-byte disk block IDs
+    pub data_blocks: Vec<u64>,
 }
 
-/// Disk B+ Tree Entry Item stored in leaf node payload.
 #[derive(Clone, Debug)]
 pub struct BPlusLeafEntry {
     pub key: String,
     pub meta: BPlusEntryMeta,
 }
 
-/// On-Disk B+ Tree Engine State Manager.
 pub struct DiskBPlusTree {
     pub root_block_id: u64,
 }
@@ -46,11 +37,10 @@ pub struct DiskBPlusTree {
 impl DiskBPlusTree {
     pub const fn new() -> Self {
         Self {
-            root_block_id: 2, // Default root block ID
+            root_block_id: 2,
         }
     }
 
-    /// Initializes on-disk B+ tree and loads or formats Superblock at Block 0.
     pub fn init(&mut self) {
         let mut disk = DISK.lock();
         disk.init();
@@ -65,16 +55,12 @@ impl DiskBPlusTree {
             }
         }
 
-        // Initialize fresh Superblock on disk
-        let root_id = 2; // Reserve block 2 for B+ Tree Root
+        let root_id = 2;
         self.root_block_id = root_id;
         self.write_superblock(&mut disk, root_id);
-
-        // Format clean B+ Tree Leaf Root at block 2
         self.format_empty_leaf(&mut disk, root_id);
     }
 
-    /// Searches for an entry by key path string in the disk B+ tree.
     pub fn search(&self, key: &str) -> Option<BPlusEntryMeta> {
         let leaf_entries = self.get_all_leaf_entries();
         for entry in leaf_entries {
@@ -85,11 +71,9 @@ impl DiskBPlusTree {
         None
     }
 
-    /// Inserts or updates an entry in the on-disk B+ tree.
     pub fn insert(&mut self, key: &str, meta: BPlusEntryMeta) -> Result<(), &'static str> {
         let mut entries = self.get_all_leaf_entries();
         
-        // Update existing key if present
         if let Some(existing) = entries.iter_mut().find(|e| e.key == key) {
             existing.meta = meta;
         } else {
@@ -97,7 +81,6 @@ impl DiskBPlusTree {
                 key: String::from(key),
                 meta,
             });
-            // Keep leaf entries sorted alphabetically by key path
             entries.sort_by(|a, b| a.key.cmp(&b.key));
         }
 
@@ -105,7 +88,6 @@ impl DiskBPlusTree {
         Ok(())
     }
 
-    /// Removes an entry by key path string from the disk B+ tree.
     pub fn remove(&mut self, key: &str) -> Result<(), &'static str> {
         let mut entries = self.get_all_leaf_entries();
         let initial_len = entries.len();
@@ -119,7 +101,6 @@ impl DiskBPlusTree {
         }
     }
 
-    /// Retrieves all directory keys directly under a parent prefix in sorted B+ tree order.
     pub fn list_directory_entries(&self, parent_prefix: &str) -> Vec<(String, bool)> {
         let entries = self.get_all_leaf_entries();
         let mut result = Vec::new();
@@ -156,8 +137,6 @@ impl DiskBPlusTree {
         result
     }
 
-    // --- Private Serialization & Storage Helpers ---
-
     fn write_superblock(&self, disk: &mut crate::disk::DiskController, root_id: u64) {
         let mut block = [0u8; DISK_BLOCK_SIZE];
         block[0..8].copy_from_slice(&SUPERBLOCK_MAGIC.to_le_bytes());
@@ -171,7 +150,6 @@ impl DiskBPlusTree {
         let _ = disk.write_block(block_id, &block);
     }
 
-    /// Reads all entries from serialized B+ tree blocks on disk.
     fn get_all_leaf_entries(&self) -> Vec<BPlusLeafEntry> {
         let disk = DISK.lock();
         let mut block = [0u8; DISK_BLOCK_SIZE];
@@ -233,7 +211,6 @@ impl DiskBPlusTree {
         entries
     }
 
-    /// Serializes B+ Tree entries back to 1024-byte disk blocks.
     fn save_all_leaf_entries(&mut self, entries: &[BPlusLeafEntry]) {
         let mut disk = DISK.lock();
         let mut block = [0u8; DISK_BLOCK_SIZE];
@@ -279,5 +256,4 @@ impl DiskBPlusTree {
     }
 }
 
-/// Global thread-safe instance of the On-Disk B+ Tree filesystem index.
 pub static BTREE: crate::vga::Locked<DiskBPlusTree> = crate::vga::Locked::new(DiskBPlusTree::new());

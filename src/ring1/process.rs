@@ -1,4 +1,4 @@
-//! # AliluOS Single-Process Resource Manager (`process.rs`)
+//! # AliluOS Single-Process Resource Manager (`ring1/process.rs`)
 //!
 //! - **WHAT**: Overarching Kernel Process Control Block (PCB) acting strictly as a **Resource Manager**.
 //! - **WHY**: Fulfills the user request: The Process is a resource manager only and does not know anything regarding execution.
@@ -11,7 +11,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::config::process::*;
-use crate::thread::{ThreadControlBlock, ThreadAction, ThreadResult, ThreadStats, ThreadState};
+use crate::thread::{ThreadControlBlock, ThreadAction, ThreadResult, ThreadStats, ThreadState, PrivilegeLevel};
 
 /// Primary Memory (RAM) Resource Manager.
 #[derive(Debug, Clone)]
@@ -203,8 +203,8 @@ impl ProcessControlBlock {
         }
     }
 
-    /// Registers a new execution thread under the Resource Manager process.
-    pub fn register_thread(&mut self, name: &str, entry_fn: fn(), stack_top: u64) -> Result<usize, &'static str> {
+    /// Registers a new execution thread with specific Privilege Ring assignment.
+    pub fn register_thread_with_ring(&mut self, name: &str, ring: PrivilegeLevel, entry_fn: fn(), stack_top: u64) -> Result<usize, &'static str> {
         let tid = self.threads.len();
         if tid >= MAX_THREADS {
             return Err("Max threads limit reached");
@@ -213,9 +213,13 @@ impl ProcessControlBlock {
         // Allocate primary memory for thread stack
         self.ram_mgr.allocate(THREAD_STACK_SIZE)?;
 
-        let tcb = ThreadControlBlock::new(tid, name, entry_fn, stack_top);
+        let tcb = ThreadControlBlock::new_with_ring(tid, name, ring, entry_fn, stack_top);
         self.threads.push(tcb);
         Ok(tid)
+    }
+
+    pub fn register_thread(&mut self, name: &str, entry_fn: fn(), stack_top: u64) -> Result<usize, &'static str> {
+        self.register_thread_with_ring(name, PrivilegeLevel::Ring0, entry_fn, stack_top)
     }
 
     /// Updates state of thread using its single handler interface method.

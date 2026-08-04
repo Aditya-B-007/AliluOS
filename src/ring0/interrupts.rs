@@ -1,15 +1,15 @@
+//! # AliluOS GDT, IDT, TSS & Hardware Interrupt Subsystem (`ring0/interrupts.rs`)
+//!
+//! - **WHAT**: Instantiates GDT descriptors for Ring 0, Ring 1, and Ring 2 privileges, configures TSS interrupt stacks, dual 8259 PICs, PIT 100 Hz timer, and IDT gates.
+//! - **WHY**: Enforces privilege ring segregation across Ring 0, Ring 1, and Ring 2, and handles hardware IRQ interrupts and system calls (`0x80`).
+
+#![allow(dead_code)]
+
 use core::arch::asm;
 use crate::vga::{Color, VGA, WRITER};
+use crate::config::interrupts::*;
+use crate::config::gdt::*;
 
-/// Fixed-capacity Lock-Free Ring Buffer for PS/2 Scancodes.
-///
-/// WHAT IT DOES:
-/// Stores raw hardware scancode bytes received from PS/2 keyboard port 0x60 in a circular buffer array.
-///
-/// WHY IT DOES IT:
-/// Decouples low-level hardware IRQ1 interrupt handling from high-level shell and keyboard event processing.
-/// Reading port 0x60 immediately in the interrupt handler prevents the hardware PS/2 controller from stalling
-/// or dropping keystrokes during fast typing or long input lines.
 pub struct ScancodeBuffer {
     buffer: [u8; 256],
     head: usize,
@@ -25,7 +25,6 @@ impl ScancodeBuffer {
         }
     }
 
-    /// Pushes a scancode byte into the ring buffer (called inside IRQ1 interrupt handler).
     pub fn push(&mut self, scancode: u8) {
         let next_head = (self.head + 1) % 256;
         if next_head != self.tail {
@@ -34,7 +33,6 @@ impl ScancodeBuffer {
         }
     }
 
-    /// Pops a scancode byte from the ring buffer if available (called by keyboard consumer).
     pub fn pop(&mut self) -> Option<u8> {
         if self.head == self.tail {
             None
@@ -46,24 +44,23 @@ impl ScancodeBuffer {
     }
 }
 
-/// Global thread-safe scancode queue instance.
 pub static SCANCODES: crate::vga::Locked<ScancodeBuffer> = crate::vga::Locked::new(ScancodeBuffer::new());
 
-/// Global Descriptor Table (GDT) Entry structure for 64-bit mode.
-/// Standard segment descriptors are 8 bytes long.
+pub fn pop_scancode() -> Option<u8> {
+    SCANCODES.lock().pop()
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 struct GdtEntry {
-    limit_low: u16,        // Low 16 bits of segment limit
-    base_low: u16,         // Low 16 bits of base address
-    base_middle: u8,       // Middle 8 bits of base address
-    access_byte: u8,       // Privilege ring and access flags
-    flags_limit_high: u8,  // Granularity & high limit bits
-    base_high: u8,         // High 8 bits of base address
+    limit_low: u16,
+    base_low: u16,
+    base_middle: u8,
+    access_byte: u8,
+    flags_limit_high: u8,
+    base_high: u8,
 }
 
-/// System Segment Descriptor for 64-bit mode (e.g. Task State Segment - TSS).
-/// Expanded to 16 bytes in 64-bit mode to hold full 64-bit addresses.
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 struct GdtSystemEntry {
@@ -77,23 +74,24 @@ struct GdtSystemEntry {
     reserved: u32,
 }
 
-/// Global Descriptor Table (GDT) layout containing null, kernel code, kernel data, and TSS descriptors.
 #[repr(C, align(16))]
 struct Gdt {
     null: GdtEntry,
-    code: GdtEntry,
-    data: GdtEntry,
-    tss: GdtSystemEntry,
+    code: GdtEntry,        // Ring 0 Code (0x08)
+    data: GdtEntry,        // Ring 0 Data (0x10)
+    driver_code: GdtEntry, // Ring 1 Code (0x18 | 3 = 0x1B)
+    driver_data: GdtEntry, // Ring 1 Data (0x20 | 3 = 0x23)
+    user_code: GdtEntry,   // Ring 2 Code (0x28 | 3 = 0x2B)
+    user_data: GdtEntry,   // Ring 2 Data (0x30 | 3 = 0x33)
+    tss: GdtSystemEntry,   // TSS (0x38 | 3 = 0x3B)
 }
 
-/// GDT Pointer structure passed to CPU's `lgdt` instruction.
 #[repr(C, packed)]
 struct GdtPointer {
     limit: u16,
     base: u64,
 }
 
-/// Task State Segment (TSS) structure for x86_64 CPU mode.
 #[repr(C, packed)]
 struct TaskStateSegment {
     reserved_1: u32,
@@ -113,7 +111,6 @@ struct TaskStateSegment {
     iomap_base: u16,
 }
 
-/// Interrupt Descriptor Table (IDT) entry structure for 64-bit mode (16 bytes).
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct IdtEntry {
@@ -126,7 +123,7 @@ pub struct IdtEntry {
 }
 
 impl IdtEntry {
-    const fn missing() -> Self {
+    pub const fn missing() -> Self {
         Self {
             pointer_low: 0,
             gdt_selector: 0,
@@ -139,35 +136,41 @@ impl IdtEntry {
 
     fn set_handler(&mut self, handler: u64) {
         self.pointer_low = (handler & 0xFFFF) as u16;
-        self.gdt_selector = 8; // Code segment selector at 0x08
-        self.options = 0x8E00; // Present, Ring 0, 64-bit Interrupt Gate
+        self.gdt_selector = KERNEL_CODE_SEL; // Code segment selector at 0x08
+        self.options = 0x8E00; // Present, Ring 0 Interrupt Gate
+        self.pointer_middle = ((handler >> 16) & 0xFFFF) as u16;
+        self.pointer_high = ((handler >> 32) & 0xFFFFFFFF) as u32;
+        self.reserved = 0;
+    }
+
+    fn set_user_syscall_handler(&mut self, handler: u64) {
+        self.pointer_low = (handler & 0xFFFF) as u16;
+        self.gdt_selector = KERNEL_CODE_SEL;
+        self.options = 0xEE00; // Present, Ring 2 (DPL=2) User Callable Interrupt Gate
         self.pointer_middle = ((handler >> 16) & 0xFFFF) as u16;
         self.pointer_high = ((handler >> 32) & 0xFFFFFFFF) as u32;
         self.reserved = 0;
     }
 }
 
-/// IDT Pointer structure passed to CPU's `lidt` instruction.
 #[repr(C, packed)]
 struct IdtPointer {
     limit: u16,
     base: u64,
 }
 
-const PIC1_COMMAND: u16 = 0x20;
-const PIC1_DATA: u16 = 0x21;
-const PIC2_COMMAND: u16 = 0xA0;
-const PIC2_DATA: u16 = 0xA1;
-
-const PIT_CHANNEL_0: u16 = 0x40;
-const PIT_COMMAND: u16 = 0x43;
-
 static mut GDT: Gdt = Gdt {
     null: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0, flags_limit_high: 0, base_high: 0 },
     code: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0x9A, flags_limit_high: 0x20, base_high: 0 },
     data: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0x92, flags_limit_high: 0, base_high: 0 },
+    driver_code: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0xBA, flags_limit_high: 0x20, base_high: 0 },
+    driver_data: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0xB2, flags_limit_high: 0, base_high: 0 },
+    user_code: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0xDA, flags_limit_high: 0x20, base_high: 0 },
+    user_data: GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0xD2, flags_limit_high: 0, base_high: 0 },
     tss: GdtSystemEntry { limit_low: 0, base_low: 0, base_middle: 0, access_byte: 0, flags_limit_high: 0, base_high_middle: 0, base_high: 0, reserved: 0 },
 };
+
+static mut TSS_STACK: [u8; 16384] = [0; 16384];
 
 static mut TSS: TaskStateSegment = TaskStateSegment {
     reserved_1: 0, rsp0: 0, rsp1: 0, rsp2: 0, reserved_2: 0,
@@ -178,14 +181,10 @@ static mut TSS: TaskStateSegment = TaskStateSegment {
 static mut IDT: [IdtEntry; 256] = [IdtEntry::missing(); 256];
 static mut TIMER_TICKS: u64 = 0;
 
-/// Initializes CPU low-level hardware structures: GDT, IDT, dual 8259 PICs, and PIT timer.
-///
-/// WHAT IT DOES:
-/// Sets up memory protection segments, builds exception/interrupt gates, remaps hardware PIC vector offsets,
-/// and configures the system clock.
-///
-/// WHY IT DOES IT:
-/// Prepares x86_64 bare-metal CPU mode for handling hardware interrupts safely without crashing or rebooting.
+pub fn timer_ticks() -> u64 {
+    unsafe { TIMER_TICKS }
+}
+
 pub fn init() {
     unsafe {
         setup_gdt();
@@ -195,8 +194,9 @@ pub fn init() {
     }
 }
 
-/// Configures GDT entries and TSS segment descriptors, then loads them into CPU register GDTR and TR.
 unsafe fn setup_gdt() {
+    TSS.rsp0 = (&TSS_STACK as *const _ as u64) + 16384;
+
     let tss_address = &TSS as *const TaskStateSegment as u64;
     let tss_size = core::mem::size_of::<TaskStateSegment>() as u32;
 
@@ -226,14 +226,13 @@ unsafe fn setup_gdt() {
         "push rax",
         "rex64 retf",
         "2:",
-        "mov ax, 0x18",
+        "mov ax, 0x3B",
         "ltr ax",
         in(reg) &gdt_ptr,
         options(readonly, nostack, preserves_flags)
     );
 }
 
-/// Sets up exception handlers and hardware interrupt vectors in the IDT, then executes `lidt`.
 unsafe fn setup_idt() {
     IDT[0].set_handler(divide_by_zero_handler as u64);
     IDT[8].set_handler(double_fault_handler as u64);
@@ -241,6 +240,7 @@ unsafe fn setup_idt() {
 
     IDT[32].set_handler(timer_interrupt_handler as u64);    // IRQ0: Timer
     IDT[33].set_handler(keyboard_interrupt_handler as u64); // IRQ1: Keyboard
+    IDT[0x80].set_user_syscall_handler(syscall_interrupt_handler as u64); // System Call Gate
 
     let idt_ptr = IdtPointer {
         limit: (core::mem::size_of::<[IdtEntry; 256]>() - 1) as u16,
@@ -254,7 +254,6 @@ unsafe fn setup_idt() {
     );
 }
 
-/// Remaps 8259 PIC IRQs 0-15 to CPU interrupt vectors 32-47 to avoid collision with CPU exceptions 0-31.
 unsafe fn setup_pic() {
     outb(PIC1_COMMAND, 0x11);
     outb(PIC2_COMMAND, 0x11);
@@ -272,12 +271,11 @@ unsafe fn setup_pic() {
     outb(PIC2_DATA, 0xFF);
 }
 
-/// Configures 8254 PIT timer frequency (e.g. 100 Hz).
 unsafe fn setup_pit(frequency: u32) {
     let divisor = 1193182 / frequency;
     outb(PIT_COMMAND, 0x36);
-    outb(PIT_CHANNEL_0, (divisor & 0xFF) as u8);
-    outb(PIT_CHANNEL_0, ((divisor >> 8) & 0xFF) as u8);
+    outb(PIT_DATA0, (divisor & 0xFF) as u8);
+    outb(PIT_DATA0, ((divisor >> 8) & 0xFF) as u8);
 }
 
 unsafe fn outb(port: u16, value: u8) {
@@ -368,13 +366,6 @@ extern "C" fn timer_interrupt_inner() {
     }
 }
 
-/// Assembly interrupt handler wrapper for IRQ1 PS/2 Keyboard interrupts.
-///
-/// WHAT IT DOES:
-/// Saves CPU caller-saved registers onto stack, calls `keyboard_interrupt_inner`, restores registers, and issues `iretq`.
-///
-/// WHY IT DOES IT:
-/// Preserves register states so kernel execution resumes transparently after the interrupt handler finishes.
 #[unsafe(naked)]
 unsafe extern "C" fn keyboard_interrupt_handler() {
     core::arch::naked_asm!(
@@ -388,35 +379,37 @@ unsafe extern "C" fn keyboard_interrupt_handler() {
     );
 }
 
-/// Keyboard interrupt handler inner execution function.
-///
-/// WHAT IT DOES:
-/// Reads raw hardware scancode byte from PS/2 data port 0x60, pushes it into `SCANCODES` ring buffer,
-/// and sends an End of Interrupt (EOI) command `0x20` to PIC1 command port 0x20.
-///
-/// WHY IT DOES IT:
-/// Draining port 0x60 immediately inside the IRQ1 handler guarantees the PS/2 controller buffer never overflows
-/// or locks up typing, even during long or continuous key presses.
 extern "C" fn keyboard_interrupt_inner() {
     unsafe {
-        let scancode: u8;
+        let mut scancode: u8;
         asm!(
             "in al, dx",
             in("dx") 0x60u16,
             out("al") scancode,
             options(nomem, nostack)
         );
+
         SCANCODES.lock().push(scancode);
         outb(PIC1_COMMAND, 0x20);
     }
 }
 
-/// Returns total system timer ticks since boot.
-pub fn timer_ticks() -> u64 {
-    unsafe { TIMER_TICKS }
+#[unsafe(naked)]
+unsafe extern "C" fn syscall_interrupt_handler() {
+    core::arch::naked_asm!(
+        "push rcx", "push rdx", "push rsi", "push rdi",
+        "push r8", "push r9", "push r10", "push r11",
+        "mov rdi, rax",
+        "mov rsi, rbx",
+        "mov rdx, rcx",
+        "call {rust_handler}",
+        "pop r11", "pop r10", "pop r9", "pop r8", "pop rdi",
+        "pop rsi", "pop rdx", "pop rcx",
+        "iretq",
+        rust_handler = sym syscall_interrupt_inner,
+    );
 }
 
-/// Pops a pending scancode from the interrupt-driven ring buffer.
-pub fn pop_scancode() -> Option<u8> {
-    SCANCODES.lock().pop()
+extern "C" fn syscall_interrupt_inner(sys_num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+    crate::syscall::syscall_dispatch(sys_num, arg1, arg2, arg3)
 }
