@@ -1,41 +1,44 @@
 //! # AliluOS Root Kernel Entry Point (`main.rs`)
 //!
-//! - **WHAT**: This file serves as the top-level binary entry point for the AliluOS kernel.
-//!   It disables standard library linking (`#![no_std]`), removes standard main entry points (`#![no_main]`),
-//!   declares internal kernel modules, defines the panic handler, and transfers CPU control to the `Kernel` struct.
-//! - **WHY**: Bare-metal operating systems execute directly on hardware without an underlying OS or runtime C library.
-//!   We must handle panic landing pads and symbol linkage (`_start`) manually.
-//! - **WHEN**: Executed immediately after the BIOS/bootloader sets up 64-bit long mode and jumps to the kernel ELF symbol `_start`.
-//! - **HOW**: Links `alloc` for dynamic heap memory, configures module declarations, initializes the kernel object,
-//!   enables x86 interrupts via the `sti` instruction, and enters the main execution event loop.
+//! - **WHAT**: Top-level binary entry point for the AliluOS bare-metal kernel.
+//! - **WHY**: Declares module paths across Privilege Ring subdirectories (`ring0/`, `ring1/`, `ring2/`).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-// --- Subsystem Module Declarations ---
-mod kernel;     // Core kernel lifecycle and event dispatcher
-mod vga;        // VGA text mode display hardware driver & global synchronized WRITER
-mod keyboard;   // PS/2 keyboard scan code translator & event queue consumer
-mod interrupts; // GDT, IDT, PIC, PIT timer, and hardware IRQ interrupt handlers
-mod allocator;  // Heap memory allocator and memory map manager
-mod fs;         // B-Tree indexed hierarchical filesystem
-mod shell;      // Interactive Command Line Interface and Help Viewer
-mod game;       // Built-in text games and drawing canvas application
-mod network;    // Integrated Networking, smoltcp TCP/IP, HTTP service, Git client & Text Browser
+// ========================================================================
+// PRIVILEGE RING MODULE DECLARATIONS (ring0, ring1, ring2)
+// ========================================================================
 
+// --- RING 0: Kernel Core, Low-Level Hardware Drivers, & Scheduler ---
+#[path = "ring0/config.rs"]     mod config;     // Centralized Architecture & Privilege Ring Parameters
+#[path = "ring0/kernel.rs"]     mod kernel;     // Core kernel lifecycle and event dispatcher
+#[path = "ring0/vga.rs"]        mod vga;        // VGA text mode display hardware driver (0xB8000)
+#[path = "ring0/keyboard.rs"]   mod keyboard;   // PS/2 keyboard hardware driver & scancode queue
+#[path = "ring0/interrupts.rs"] mod interrupts; // GDT, IDT, TSS, PIC/PIT, IRQs, and Syscall Gate
+#[path = "ring0/allocator.rs"]  mod allocator;  // Heap memory allocator (5 MiB memory pool)
+#[path = "ring0/scheduler.rs"]  mod scheduler;  // Preemptive multi-threaded round-robin scheduler
+
+// --- RING 1: Single-Process Resource Manager, Storage, & Networking ---
+#[path = "ring1/process.rs"]    mod process;    // Single-Process Resource Manager (RAM, Disk, Net quotas)
+#[path = "ring1/disk.rs"]       mod disk;       // Secondary ATA Disk Hardware Driver & persistent storage
+#[path = "ring1/btree.rs"]      mod btree;      // On-Disk B+ Tree Indexing Engine (1024-byte blocks)
+#[path = "ring1/vat.rs"]        mod vat;        // In-Memory Virtual Address Table & demand paging page cache
+#[path = "ring1/fs.rs"]         mod fs;         // B+ Tree persistent filesystem API
+#[path = "ring1/network.rs"]    mod network;    // Integrated Networking, smoltcp TCP/IP stack, RTL8139 NIC
+
+// --- RING 2: Execution Threads, System Calls, Shell, & Applications ---
+#[path = "ring2/thread.rs"]     mod thread;     // Thread Control Block (TCB), CpuContext, & single handler method
+#[path = "ring2/syscall.rs"]    mod syscall;    // 15-function System Call Dispatcher Gate (0x01..0x0F)
+#[path = "ring2/shell.rs"]      mod shell;      // Interactive CLI shell, text editor, and tasks monitor
+#[path = "ring2/game.rs"]       mod game;       // Built-in text games and drawing canvas application
 
 use core::panic::PanicInfo;
 use kernel::Kernel;
 
 /// Kernel Panic Handler Function.
-///
-/// - **WHAT**: Catches unrecoverable runtime errors and fatal assertions across the kernel.
-/// - **WHY**: In a `#![no_std]` environment, there is no operating system or stack unwind runtime to catch panics.
-///   Rust requires a custom panic handler symbol to define how the CPU responds when a panic occurs.
-/// - **WHEN**: Invoked automatically by the Rust runtime whenever an `assert!`, `unwrap()`, or `panic!` macro fails.
-/// - **HOW**: Accepts `PanicInfo` containing file/line metadata. Halts execution safely by entering an infinite loop.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let mut vga = crate::vga::WRITER.lock();
@@ -51,31 +54,14 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 /// Low-level Kernel Entry Symbol (`_start`).
-///
-/// - **WHAT**: The absolute first function executed when the kernel receives control from the bootloader.
-/// - **WHY**: Standard C/Rust programs use `main()`, but bare-metal kernels require `_start` as the default ELF symbol.
-///   `#[no_mangle]` preserves the exact name `_start` in the compiled binary symbol table so the bootloader can find it.
-/// - **WHEN**: Triggered by the bootloader after kernel loading, stack initialization, and page table setup.
-/// - **HOW**:
-///   1. Instantiates the main `Kernel` state object.
-///   2. Calls `kernel.initialize()` to setup VGA, keyboard, GDT, IDT, PIC, PIT, and Heap memory.
-///   3. Executes inline assembly `sti` (Set Interrupt Flag) to enable hardware interrupts.
-///   4. Calls `kernel.run()`, which never returns (`-> !`).
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // 1. Construct the core Kernel state instance
     let mut kernel = Kernel::new();
-
-    // 2. Initialize low-level drivers, memory allocators, and interrupt descriptor tables
     kernel.initialize();
 
-    // 3. Enable x86 CPU hardware interrupts using assembly `sti` instruction.
-    //    WHY: Allows PIT timer ticks (IRQ0) and PS/2 keyboard inputs (IRQ1) to interrupt the CPU.
-    //    HOW: `sti` sets the IF (Interrupt Flag) in the CPU's EFLAGS register.
     unsafe {
         core::arch::asm!("sti", options(nomem, nostack));
     }
 
-    // 4. Enter the infinite kernel event polling loop
     kernel.run();
 }

@@ -61,25 +61,41 @@ The project intentionally starts small and grows incrementally, implementing eac
 
 ## Folder structure
 ```
-rust-cli-os/
+AliluOS/
 │
 ├── .cargo/
 │   └── config.toml               # Configures the build target and compiler flags
 │
 ├── src/                          # The Kernel Source Code
-│   ├── main.rs                   # Kernel entry point, panic handler, and main shell loop
-│   ├── vga.rs                    # Text-mode video driver (handles printing and println!)
-│   ├── keyboard.rs               # Keyboard interrupt handling and key translation
-│   ├── interrupts.rs             # IDT, GDT, and Hardware Interrupt configurations
-│   ├── allocator.rs              # Heap allocation initialization (for dynamic strings/vecs)
-│   ├── fs.rs                     # The in-memory or basic file system (create, delete, edit)
-│   └── game.rs                   # The single built-in text game logic
+│   ├── main.rs                   # Bare-metal entry point (_start), panic handler, & ring module declarations
+│   │
+│   ├── ring0/                    # Ring 0: Kernel Core, Hardware Drivers, & Scheduler
+│   │   ├── config.rs             # Centralized architecture, port addresses, & privilege ring constants
+│   │   ├── kernel.rs             # Core kernel initialization & thread payload handlers (TID 0..10)
+│   │   ├── interrupts.rs         # GDT (Ring 0/1/2), IDT, TSS, PIC/PIT, IRQs, & Syscall Gate (0x80)
+│   │   ├── scheduler.rs         # Preemptive multi-threaded round-robin scheduler
+│   │   ├── allocator.rs          # Global heap allocator (5 MiB memory pool)
+│   │   ├── vga.rs                # Text-mode VGA hardware display driver (0xB8000)
+│   │   └── keyboard.rs           # PS/2 keyboard hardware driver & scancode queue
+│   │
+│   ├── ring1/                    # Ring 1: Single-Process Resource Manager & Storage/Network
+│   │   ├── process.rs            # Single-Process Resource Manager (RAM, Disk, Net bandwidth quotas)
+│   │   ├── disk.rs               # Secondary ATA Disk Driver & persistent 1024-byte block storage
+│   │   ├── btree.rs              # On-disk B+ Tree indexing engine
+│   │   ├── vat.rs                # In-Memory Virtual Address Table & demand paging page cache
+│   │   ├── fs.rs                 # B+ Tree persistent filesystem API
+│   │   └── network.rs            # Integrated Networking, smoltcp TCP/IP stack, RTL8139 NIC
+│   │
+│   └── ring2/                    # Ring 2: Execution Threads, Syscalls, Shell, & Applications
+│       ├── thread.rs             # Thread Control Block (TCB), CpuContext, & single handler method
+│       ├── syscall.rs            # Comprehensive 15-function System Call Dispatcher Gate (0x01..0x0F)
+│       ├── shell.rs              # Interactive CLI shell, text editor, and tasks resource monitor
+│       └── game.rs               # Built-in text games (Atari, Chess) and drawing canvas application
 │
 ├── x86_64-bare_metal.json        # Custom JSON target specification file for bare-metal x86_64
-├── Cargo.toml                    # Project dependencies (x86_64, bootloader, pc-keyboard, etc.)
+├── Cargo.toml                    # Project dependencies (x86_64, bootloader, etc.)
 └── build.rs                      # Optional build script to link files or automate image creation
-
-```
+````
 ## Requirements
 
 - Rust Nightly
